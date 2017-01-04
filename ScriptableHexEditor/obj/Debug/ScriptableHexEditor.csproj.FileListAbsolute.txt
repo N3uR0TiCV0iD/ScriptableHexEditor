@@ -1,0 +1,10 @@
+c:\users\patrick\documents\visual studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\bin\Debug\ScriptableHexEditor.exe
+c:\users\patrick\documents\visual studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\bin\Debug\ScriptableHexEditor.pdb
+c:\users\patrick\documents\visual studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\obj\Debug\ScriptableHexEditor.MainForm.resources
+c:\users\patrick\documents\visual studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\obj\Debug\ScriptableHexEditor.Properties.Resources.resources
+c:\users\patrick\documents\visual studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\obj\Debug\ScriptableHexEditor.csproj.GenerateResource.Cache
+c:\users\patrick\documents\visual studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\obj\Debug\ScriptableHexEditor.exe
+c:\users\patrick\documents\visual studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\obj\Debug\ScriptableHexEditor.pdb
+C:\Users\Patrick\documents\visual studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\bin\Debug\LuaInterface.dll
+C:\Users\Patrick\documents\visual studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\bin\Debug\lua51.dll
+C:\Users\Patrick\Documents\Visual Studio 2015\Projects\ScriptableHexEditor\ScriptableHexEditor\obj\Debug\ScriptableHexEditor.csprojResolveAssemblyReference.cache
