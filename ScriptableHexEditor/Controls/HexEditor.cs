@@ -2,6 +2,7 @@
 using System.IO;
 using System.Text;
 using System.Drawing;
+using System.Diagnostics;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 namespace ScriptableHexEditor
@@ -15,9 +16,11 @@ namespace ScriptableHexEditor
         [DllImport("user32.dll")] private static extern bool ShowCaret(IntPtr hwnd);
         [DllImport("user32.dll")] private static extern bool HideCaret(IntPtr hwnd);
         [DllImport("user32.dll")] private static extern bool DestroyCaret();
-        const int HEXBYTES_WIDTH = CHARWIDTH * 3;
-        const int HEXSPACING_HEIGHT = 20;
         const int CHARWIDTH = 10;
+        const int HEXSPACING_HEIGHT = 20;
+        const int HEXBYTES_WIDTH = CHARWIDTH * 3;
+        static readonly int TRIPLECLICK_TIME = SystemInformation.DoubleClickTime / 2;
+        Stopwatch doubleClickStopwatch;
         BinaryReader dataReader;
         MemoryStream dataStream;
         VScrollBar scrollBar;
@@ -41,6 +44,7 @@ namespace ScriptableHexEditor
             this.dataStream = new MemoryStream();
             this.scrollBar.Dock = DockStyle.Right;
             this.SelectionColor = SystemColors.Highlight;
+            this.doubleClickStopwatch = Stopwatch.StartNew();
             filePath = "ScriptableHexEditor.vshost.exe.manifest"; //TMP
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.DoubleBuffer, true);
             try
@@ -141,19 +145,79 @@ namespace ScriptableHexEditor
                 if (e.X >= 85)
                 {
                     //In Hex | HexText Area
-                    selectionStart = ComputeCaretPosition(e.X, e.Y);
-                    mouseSelecting = e.Button == MouseButtons.Left;
-                    OnSelectionChanged(false);
+                    if (e.Button == MouseButtons.Left)
+                    {
+                        if (e.Clicks == 1)
+                        {
+                            if (doubleClickStopwatch.ElapsedMilliseconds > TRIPLECLICK_TIME) //Did he actually do a triple-click?
+                            {
+                                //No he didn't. Let's just deselect and move the caret
+                                selectionStart = ComputeCaretPosition(e.X, e.Y);
+                                OnSelectionChanged(false);
+                                mouseSelecting = true;
+                            }
+                            else
+                            {
+                                //Yes he did! Let's select the entire row
+                                SelectYPosRow(e.Y);
+                            }
+                        }
+                        else
+                        {
+                            selectionStart = ComputeCaretPosition(e.X, e.Y);
+                            selectionEnd = selectionStart + 1;
+                            doubleClickStopwatch.Reset();
+                            doubleClickStopwatch.Start();
+                            OnSelectionChanged(true);
+                        }
+                    }
+                    else
+                    {
+                        bool clickedOnSelection;
+                        int newCaretPos = ComputeCaretPosition(e.X, e.Y);
+                        if (selectionEnd >= selectionStart) //Is it forward selection?
+                        {
+                            //Yes it is!
+                            if (newCaretPos >= selectionStart && newCaretPos <= selectionEnd) //Did the user right click in the selected area?
+                            {
+                                clickedOnSelection = true;
+                            }
+                            else
+                            {
+                                clickedOnSelection = false;
+                            }
+                        }
+                        else if (newCaretPos >= selectionEnd && newCaretPos <= selectionStart)
+                        {
+                            //No it isn't BUT the user did click in the selected area
+                            clickedOnSelection = true;
+                        }
+                        else
+                        {
+                            //No it isn't AND the user did NOT click in the selected area
+                            clickedOnSelection = false;
+                        }
+                        if (!clickedOnSelection)
+                        {
+                            selectionStart = newCaretPos;
+                        }
+                        OnSelectionChanged(clickedOnSelection);
+                        mouseSelecting = false;
+                    }
                 }
                 else if (e.Clicks == 2 && e.Button == MouseButtons.Left)
                 {
                     //In Offset Area
-                    selectionStart = 16 * ((e.Y - 30) / HEXSPACING_HEIGHT);
-                    selectionEnd = selectionStart + 16;
-                    OnSelectionChanged(true);
+                    SelectYPosRow(e.Y);
                 }
             }
             this.Select();
+        }
+        private void SelectYPosRow(int yPos)
+        {
+            selectionStart = 16 * ((yPos - 30) / HEXSPACING_HEIGHT);
+            selectionEnd = selectionStart + 16;
+            OnSelectionChanged(true);
         }
         protected virtual void OnSelectionChanged(bool selecting)
         {

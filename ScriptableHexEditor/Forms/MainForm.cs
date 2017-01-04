@@ -9,7 +9,6 @@ namespace ScriptableHexEditor
         public MainForm()
         {
             InitializeComponent();
-            hexEditor1.changed += HexEditor1_changed;
             for (int i = 0; i < 25; i++)
             {
                 treeView1.Nodes.Add("Some field");
