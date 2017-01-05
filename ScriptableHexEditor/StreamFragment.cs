@@ -2,7 +2,12 @@
 using System.IO;
 namespace ScriptableHexEditor
 {
-    public class StreamFragment// : Stream
+    public class StreamFragment
     {
+        MemoryStream stream;
+        public StreamFragment()
+        {
+            this.stream = new MemoryStream();
+        }
     }
 }

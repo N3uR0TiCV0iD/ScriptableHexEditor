@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Text;
+using LuaInterface;
 using System.Drawing;
 using System.Diagnostics;
 using System.Windows.Forms;
@@ -8,10 +9,11 @@ using System.Runtime.InteropServices;
 namespace ScriptableHexEditor
 {
     //Lots and lots of magic numbers here... Be prepared :^)
+    public delegate void ScriptDoneHandler(IFieldContainer rootFields);
     public partial class HexEditor : Control
     {
         //TODO: Fields background/rectangle highlight (Can be disabled) | Fields tree view
-        [DllImport("user32.dll")] private static extern bool CreateCaret(IntPtr hwnd, IntPtr hBMP, int w, int h);
+        [DllImport("user32.dll")] private static extern bool CreateCaret(IntPtr hwnd, IntPtr hBMP, int width, int height);
         [DllImport("user32.dll")] private static extern bool SetCaretPos(int x, int y);
         [DllImport("user32.dll")] private static extern bool ShowCaret(IntPtr hwnd);
         [DllImport("user32.dll")] private static extern bool HideCaret(IntPtr hwnd);
@@ -21,8 +23,10 @@ namespace ScriptableHexEditor
         const int HEXBYTES_WIDTH = CHARWIDTH * 3;
         static readonly int TRIPLECLICK_TIME = SystemInformation.DoubleClickTime / 2;
         Stopwatch doubleClickStopwatch;
+        HexEditorScript usingScript;
         BinaryReader dataReader;
         MemoryStream dataStream;
+        SimpleLine virtualCaret;
         VScrollBar scrollBar;
         Color selectionColor;
         Brush selectionBrush;
@@ -41,12 +45,18 @@ namespace ScriptableHexEditor
             byte[] buffer = new byte[4096];
             this.scrollBar = new VScrollBar();
             this.Controls.Add(this.scrollBar);
+            this.virtualCaret = new SimpleLine();
+            this.Controls.Add(this.virtualCaret);
             this.dataStream = new MemoryStream();
             this.scrollBar.Dock = DockStyle.Right;
             this.SelectionColor = SystemColors.Highlight;
+            this.scrollBar.MouseEnter += ScrollBar_MouseEnter;
             this.doubleClickStopwatch = Stopwatch.StartNew();
-            filePath = "ScriptableHexEditor.vshost.exe.manifest"; //TMP
+            this.scrollBar.ValueChanged += ScrollBar_ValueChanged;
+            this.Font = new Font("Courier New", 12F, FontStyle.Regular, GraphicsUnit.Point, 0);
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.DoubleBuffer, true);
+            //TMP
+            filePath = "C:\\Users\\Patrick\\AppData\\LocalLow\\DefaultCompany\\All-Mozart\\Sheets\\FRENCH SONG.msf";
             try
             {
                 using (FileStream editingFileStream = new FileStream(filePath, FileMode.Open))
@@ -65,6 +75,12 @@ namespace ScriptableHexEditor
             {
 
             }
+            //END TMP
+            this.virtualCaret.BackColor = Color.Black;
+            this.virtualCaret.Visible = false;
+            this.scrollBar.LargeChange = 1;
+            this.virtualCaret.Height = 2;
+            this.caretHidden = true;
             this.inHexArea = true;
         }
         public HexEditor(string filePath) : this()
@@ -98,12 +114,19 @@ namespace ScriptableHexEditor
             }
             set
             {
-                selectionStart = value;
-                if (this.Focused && !caretHidden)
+                if (value >= 0 && value <= dataStream.Length)
                 {
-                    SetCaretPos(GetCaretHexXPos(value % 16), GetCaretYPos(value / 16));
+                    selectionStart = value;
+                    if (this.Focused && !caretHidden)
+                    {
+                        UpdateCaretPositions();
+                    }
+                    OnSelectionChanged(false);
                 }
-                OnSelectionChanged(false);
+                else
+                {
+                    throw new Exception();
+                }
             }
         }
         public int SelectionLength
@@ -114,13 +137,136 @@ namespace ScriptableHexEditor
             }
             set
             {
-                selectionEnd = selectionStart + value;
-                OnSelectionChanged(true);
+                if (value >= 0)
+                {
+                    selectionEnd = selectionStart + value;
+                    OnSelectionChanged(true);
+                }
+                else
+                {
+                    throw new Exception();
+                }
             }
         }
         public void RunScript(string scriptPath)
         {
+            bool retry = true;
+            bool success = false;
+            usingScript = new HexEditorScript(scriptPath, dataReader);
+            while (retry)
+            {
+                try
+                {
+                    usingScript.Run();
+                    success = true;
+                    retry = false;
+                }
+                catch (LuaException ex)
+                {
+                    retry = MessageBox.Show("LuaError: " + ex.Message, "ERROR: LuaError", MessageBoxButtons.RetryCancel, MessageBoxIcon.Warning) == DialogResult.Retry;
+                }
+                catch (EndOfStreamException ex)
+                {
+                    MessageBox.Show("Warning: Something went wrong, are you sure this this is the correct file format?", "Warning: Bad format?", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    retry = false;
+                }
+                catch (Exception ex)
+                {
+                    retry = false;
+                    throw ex; //TODO: Display exception info
+                }
+            }
+            if (success)
+            {
+                ScriptDone?.Invoke(usingScript);
+                this.Refresh();
+            }
+        }
+        public void FindHexBytes(string hexString)
+        {
 
+        }
+        public void ScrollUp()
+        {
+            ScrollUp(1);
+        }
+        public void ScrollUp(int amount)
+        {
+            int newValue = scrollBar.Value - amount;
+            if (newValue < scrollBar.Minimum)
+            {
+                newValue = scrollBar.Minimum;
+            }
+            scrollBar.Value = newValue;
+        }
+        public void ScrollDown()
+        {
+            ScrollDown(1);
+        }
+        public void ScrollDown(int amount)
+        {
+            int newValue = scrollBar.Value + amount;
+            if (newValue > scrollBar.Maximum)
+            {
+                newValue = scrollBar.Maximum;
+            }
+            scrollBar.Value = newValue;
+        }
+        private void ScrollBar_ValueChanged(object sender, EventArgs e)
+        {
+            RefreshCaretState();
+            this.Refresh();
+        }
+        private void RefreshCaretState()
+        {
+            int newYPos = GetCaretYPos(selectionStart / 16);
+            if (newYPos < 20 || newYPos >= this.Height)
+            {
+                SafeHideCaret();
+            }
+            else if (!selecting)
+            {
+                UpdateCaretPositions();
+                SafeShowCaret();
+            }
+        }
+        private void UpdateCaretPositions()
+        {
+            const int VIRTUALCARET_XOFFSET = 0;
+            int selectionStartColumn = selectionStart % 16;
+            int newYPos = GetCaretYPos(selectionStart / 16);
+            if (inHexArea)
+            {
+                const int VIRTUAL_TEXTCARET_YOFFSET = HEXSPACING_HEIGHT - 2;
+                int xOffset;
+                if (selectionStartColumn < 2)
+                {
+                    xOffset = 1;
+                }
+                else if (selectionStartColumn >= 12)
+                {
+                    xOffset = -1;
+                }
+                else
+                {
+                    xOffset = 0;
+                }
+                virtualCaret.Location = new Point(GetCaretTextXPos(selectionStartColumn) + xOffset + VIRTUALCARET_XOFFSET, newYPos + VIRTUAL_TEXTCARET_YOFFSET); //Put the virtual caret on the HexText area
+                SetCaretPos(GetCaretHexXPos(selectionStartColumn), newYPos);
+                virtualCaret.Width = CHARWIDTH;
+            }
+            else
+            {
+                const int VIRTUAL_HEXCARET_YOFFSET = HEXSPACING_HEIGHT - 4;
+                const int VIRTUAL_HEXCARET_WIDTH = CHARWIDTH * 2;
+                virtualCaret.Location = new Point(GetCaretHexXPos(selectionStartColumn) + VIRTUALCARET_XOFFSET, newYPos + VIRTUAL_HEXCARET_YOFFSET); //Put the virtual caret on the Hex area
+                SetCaretPos(GetCaretTextXPos(selectionStartColumn), newYPos);
+                virtualCaret.Width = VIRTUAL_HEXCARET_WIDTH;
+            }
+        }
+        private void ScrollBar_MouseEnter(object sender, EventArgs e)
+        {
+            this.Cursor = Cursors.Default;
         }
         protected override void OnMouseMove(MouseEventArgs e)
         {
@@ -130,7 +276,7 @@ namespace ScriptableHexEditor
                 if (mouseSelecting)
                 {
                     selectionEnd = ComputeCaretPosition(e.X, e.Y);
-                    OnSelectionChanged(true);
+                    OnSelectionChanged(selectionEnd != selectionStart);
                 }
             }
             else
@@ -215,31 +361,36 @@ namespace ScriptableHexEditor
         }
         private void SelectYPosRow(int yPos)
         {
-            selectionStart = 16 * ((yPos - 30) / HEXSPACING_HEIGHT);
+            selectionStart = ( ((yPos - 30) / HEXSPACING_HEIGHT) + scrollBar.Value) * 16;
             selectionEnd = selectionStart + 16;
             OnSelectionChanged(true);
         }
         protected virtual void OnSelectionChanged(bool selecting)
         {
+            int selectionEndRow;
+            int displayableRows = GetDisplayableRows();
+            int lastVisibleRow = scrollBar.Value + displayableRows;
+            this.selecting = selecting;
             if (!selecting)
             {
-                selectionEnd = selectionStart;
-                if (inHexArea)
-                {
-                    SetCaretPos(GetCaretHexXPos(selectionStart % 16), GetCaretYPos(selectionStart / 16));
-                }
-                else
-                {
-                    SetCaretPos(GetCaretTextXPos(selectionStart % 16), GetCaretYPos(selectionStart / 16));
-                }
                 SafeShowCaret();
+                selectionEnd = selectionStart;
+                UpdateCaretPositions();
             }
             else
             {
                 SafeHideCaret();
             }
-            SelectionChanged?.Invoke(this, null);
-            this.selecting = selecting;
+            selectionEndRow = selectionEnd / 16;
+            if (selectionEndRow < scrollBar.Value)
+            {
+                scrollBar.Value = selectionEndRow;
+            }
+            else if (selectionEndRow > (lastVisibleRow - 1))
+            {
+                scrollBar.Value = selectionEndRow - displayableRows + 1;
+            }
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
             wroteNibble = false;
             this.Refresh();
         }
@@ -247,6 +398,7 @@ namespace ScriptableHexEditor
         {
             if (caretHidden)
             {
+                virtualCaret.Visible = true;
                 ShowCaret(this.Handle);
                 caretHidden = false;
             }
@@ -255,13 +407,14 @@ namespace ScriptableHexEditor
         {
             if (!caretHidden)
             {
+                virtualCaret.Visible = false;
                 HideCaret(this.Handle);
                 caretHidden = true;
             }
         }
         private int ComputeCaretPosition(int xPos, int yPos)
         {
-            int caretPosition = 16 * ((yPos - 30) / HEXSPACING_HEIGHT);
+            int caretPosition = ( ((yPos - 30) / HEXSPACING_HEIGHT) + scrollBar.Value ) * 16;
             if (xPos < 566)
             {
                 //In Hex Area
@@ -292,32 +445,30 @@ namespace ScriptableHexEditor
         }
         protected override void OnMouseWheel(MouseEventArgs e)
         {
-            int newValue;
             if (e.Delta > 0)
             {
-                //Scroll Up
-                newValue = this.scrollBar.Value - 1;
-                if (newValue > this.scrollBar.Minimum)
-                {
-                    this.scrollBar.Value = newValue;
-                }
+                ScrollUp();
             }
             else
             {
-                //Scroll Down
-                newValue = this.scrollBar.Value + 1;
-                if (newValue < this.scrollBar.Maximum)
-                {
-                    this.scrollBar.Value = newValue;
-                }
+                ScrollDown();
             }
         }
         protected override void OnKeyDown(KeyEventArgs e)
         {
+            int moveAmount;
             switch (e.KeyCode)
             {
                 case Keys.Right:
-                    if (ModifierKeys != Keys.Shift)
+                    if (!e.Control)
+                    {
+                        moveAmount = 1;
+                    }
+                    else
+                    {
+                        //TODO: Find the amount of bytes until the start of a next field and do moveAmount = ...
+                    }
+                    if (!e.Shift)
                     {
                         if (!selecting)
                         {
@@ -350,7 +501,15 @@ namespace ScriptableHexEditor
                     }
                 break;
                 case Keys.Left:
-                    if (ModifierKeys != Keys.Shift)
+                    if (!e.Control)
+                    {
+                        moveAmount = 1;
+                    }
+                    else
+                    {
+                        //TODO: Find the amount of bytes until the start of a previous field and do moveAmount = ...
+                    }
+                    if (!e.Shift)
                     {
                         if (selectionEnd >= selectionStart)
                         {
@@ -374,7 +533,15 @@ namespace ScriptableHexEditor
                     }
                 break;
                 case Keys.Up:
-                    if (ModifierKeys != Keys.Shift)
+                    if (!e.Control)
+                    {
+                        moveAmount = 16;
+                    }
+                    else
+                    {
+                        //TODO: Find the amount of bytes until the start of a previous structure and do moveAmount = ...
+                    }
+                    if (!e.Shift)
                     {
                         if (selectionEnd >= 16)
                         {
@@ -393,7 +560,15 @@ namespace ScriptableHexEditor
                     }
                 break;
                 case Keys.Down:
-                    if (ModifierKeys != Keys.Shift)
+                    if (!e.Control)
+                    {
+                        moveAmount = 16;
+                    }
+                    else
+                    {
+                        //TODO: Find the amount of bytes until the start of a next structure and do moveAmount = ...
+                    }
+                    if (!e.Shift)
                     {
                         if (selectionEnd <= (dataStream.Length - 16))
                         {
@@ -402,6 +577,8 @@ namespace ScriptableHexEditor
                         else
                         {
                             selectionStart = (int)dataStream.Length;
+                            OnSelectionChanged(false);
+                            ScrollDown();
                         }
                         OnSelectionChanged(false);
                     }
@@ -418,9 +595,36 @@ namespace ScriptableHexEditor
                         OnSelectionChanged(true);
                     }
                 break;
+                case Keys.Home:
+                    if (!e.Shift)
+                    {
+                        selectionStart = 0;
+                        OnSelectionChanged(false);
+                    }
+                    else
+                    {
+                        selectionEnd = 0;
+                        OnSelectionChanged(true);
+                    }
+                break;
                 case Keys.PageUp:
+
                 break;
                 case Keys.PageDown:
+
+                break;
+                case Keys.End:
+                    if (!e.Shift)
+                    {
+                        selectionStart = (int)dataStream.Length;
+                        OnSelectionChanged(false);
+                    }
+                    else
+                    {
+                        selectionEnd = (int)dataStream.Length;
+                        OnSelectionChanged(true);
+                    }
+                    ScrollDown();
                 break;
                 case Keys.D0:
                 case Keys.D1:
@@ -483,8 +687,7 @@ namespace ScriptableHexEditor
                             UpdateLastNibble((int)e.KeyCode - 65 + 10);
                         }
                     }
-                    break;
-
+                break;
                 case Keys.Insert:
 
                 break;
@@ -529,6 +732,30 @@ namespace ScriptableHexEditor
                 OnSelectionChanged(false);
             }
         }
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            UpdateScrollBar();
+        }
+        private void UpdateScrollBar()
+        {
+            int rows = (int)Math.Ceiling(dataStream.Length / 16F) + 1; //+1 to give an extra row at the very bottom
+            int nonDisplayableRows = rows - GetDisplayableRows();
+            if (nonDisplayableRows > 0)
+            {
+                this.scrollBar.Maximum = nonDisplayableRows;
+                this.scrollBar.Enabled = true;
+            }
+            else
+            {
+                this.scrollBar.Enabled = false;
+                this.scrollBar.Maximum = 0;
+            }
+        }
+        private int GetDisplayableRows()
+        {
+            return (this.Height - 20 + (HEXSPACING_HEIGHT / 8)) / HEXSPACING_HEIGHT;
+        }
         protected override void OnPaint(PaintEventArgs e)
         {
             int diff;
@@ -545,100 +772,28 @@ namespace ScriptableHexEditor
             e.Graphics.FillRectangle(Brushes.White, 85, 20, this.Width - 85, this.Height - 20);
             if (selectionLength != 0)
             {
-                const int HIGHLIGHT_XOFFSET = 7;
-                int selectedRows;
-                int realSelectionEnd;
                 int realSelectionStart;
                 if (selectionLength > 0)
                 {
                     //Forward selection
                     realSelectionStart = selectionStart;
-                    realSelectionEnd = selectionEnd;
                 }
                 else
                 {
                     //Backwards selection
                     selectionLength = -selectionLength;
                     realSelectionStart = selectionEnd;
-                    realSelectionEnd = selectionStart;
                 }
-                int lastRowColumn = realSelectionEnd % 16;
-                int firstRowColumn = realSelectionStart % 16;
-                int firstRowRow = realSelectionStart / 16;
-                bool isFirstRowFullySelected = firstRowColumn == 0 && selectionLength >= 16;
-                bool isLastRowFullySelected = lastRowColumn == 0;
-                int yStart = 25 + (firstRowRow * HEXSPACING_HEIGHT);
-                selectedRows = (int)Math.Ceiling((firstRowColumn + selectionLength) / 16F);
-                switch (selectedRows)
-                {
-                    default: //selectedRows > 2
-                        if (isFirstRowFullySelected && isLastRowFullySelected)
-                        {
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(0), yStart, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * selectedRows);
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(0), yStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * selectedRows);
-                        }
-                        else if (isFirstRowFullySelected)
-                        {
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(0), yStart, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * (selectedRows - 1));
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(0), yStart + ((selectedRows - 1) * HEXSPACING_HEIGHT), (HEXBYTES_WIDTH * lastRowColumn) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(0), yStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * (selectedRows - 1));
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(0), yStart + ((selectedRows - 1) * HEXSPACING_HEIGHT), CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
-                        }
-                        else if (isLastRowFullySelected)
-                        {
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * (16 - firstRowColumn)) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(0), yStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * (selectedRows - 1));
-
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * (16 - firstRowColumn), HEXSPACING_HEIGHT);
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(0), yStart + HEXSPACING_HEIGHT, CHARWIDTH * 16, HEXSPACING_HEIGHT * (selectedRows - 1));
-                        }
-                        else
-                        {
-                            //Cannot be batched
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * (16 - firstRowColumn)) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(0), yStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * (selectedRows - 2));
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(0), yStart + ((selectedRows - 1) * HEXSPACING_HEIGHT), (HEXBYTES_WIDTH * lastRowColumn) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * (16 - firstRowColumn), HEXSPACING_HEIGHT);
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(0), yStart + HEXSPACING_HEIGHT, CHARWIDTH * 16, HEXSPACING_HEIGHT * (selectedRows - 2));
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(0), yStart + ((selectedRows - 1) * HEXSPACING_HEIGHT), CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
-                        }
-                        break;
-                    case 1:
-                        e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * selectionLength) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-                        e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * selectionLength, HEXSPACING_HEIGHT);
-                    break;
-                    case 2:
-                        if (isFirstRowFullySelected && isLastRowFullySelected)
-                        {
-                            //Can be batched
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(0), yStart, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * 2);
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(0), yStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
-                        }
-                        else
-                        {
-                            if (isLastRowFullySelected)
-                            {
-                                lastRowColumn = 16;
-                            }
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * (16 - firstRowColumn)) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretHexXPos(0), yStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * lastRowColumn) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * (16 - firstRowColumn), HEXSPACING_HEIGHT);
-                            e.Graphics.FillRectangle(selectionBrush, GetCaretTextXPos(0), yStart + HEXSPACING_HEIGHT, CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
-                        }
-                    break;
-                }
+                FillRectangleRegion(realSelectionStart, selectionLength, selectionBrush, e.Graphics);
             }
             e.Graphics.DrawLine(Pens.Black, 0, 20, this.Width, 20);
             e.Graphics.DrawLine(Pens.Black, 85, 0, 85, this.Height);
             e.Graphics.DrawLine(Pens.Black, 567, 0, 567, this.Height);
             e.Graphics.DrawString("0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF", this.Font, Brushes.Gray, 95, 0);
-            dataStream.Position = 0;
+            dataStream.Position = scrollBar.Value * 16;
             while (yPos < this.Height && dataStream.Position != dataStream.Length)
             {
-                fileOffset = (16 * ((yPos - 25) / 20)).ToString("X");
+                fileOffset = dataStream.Position.ToString("X");
                 diff = (int)(dataStream.Length - dataStream.Position);
                 times = diff >= 16 ? 16 : diff;
                 for (int currColumn = 0; currColumn < times; currColumn++)
@@ -669,23 +824,94 @@ namespace ScriptableHexEditor
                 asciiString.Length = 0;
                 yPos += 20;
             }
-            /*
-            for (int times2 = 0; times2 < 16; times2++)
+        }
+        private void FillRectangleRegion(int regionStart, int regionLength, Brush brush, Graphics graphics)
+        {
+            const int CaretHexXPos0 = 90; //GetCaretHexXPos(0)
+            const int CaretTextXPos0 = 572; //GetCaretTextXPos(0)
+            const int HIGHLIGHT_XOFFSET = 7;
+            int regionEnd = regionStart + regionLength;
+            int lastRowRow = regionEnd / 16;
+            if (lastRowRow >= scrollBar.Value) //Is the last row hidden?
             {
-                e.Graphics.DrawLine(Pens.Black, 572 + (times2 * CHARWIDTH), 0, 572 + (times2 * CHARWIDTH), this.Height);
+                //No it isn't, therefore we have to draw at least 1 row
+                int firstRowColumn = regionStart % 16;
+                int firstRowRow = regionStart / 16;
+                if (firstRowRow < scrollBar.Value) //Is the first row hidden?
+                {
+                    //Yes it is, this means there is a possibility of other rows being hidden as well. Let's change the region so that it is drawn in the visible area
+                    int hiddenRows = scrollBar.Value - firstRowRow;
+                    regionLength = regionLength - (16 - firstRowColumn) - ((hiddenRows - 1) * 16);
+                    firstRowRow += hiddenRows;
+                    firstRowColumn = 0;
+                }
+                int lastRowColumn = regionEnd % 16;
+                int yStart = 25 + ((firstRowRow - scrollBar.Value) * HEXSPACING_HEIGHT);
+                int drawingRows = (int)Math.Ceiling((firstRowColumn + regionLength) / 16F);
+                bool isFirstRowFullySelected = firstRowColumn == 0 && regionLength >= 16;
+                bool isLastRowFullySelected = lastRowColumn == 0; //Since selection would end on the first byte of the next row :)
+                switch (drawingRows)
+                {
+                    default: //drawingRows > 2
+                        if (isFirstRowFullySelected && isLastRowFullySelected)
+                        {
+                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * drawingRows);
+                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * drawingRows);
+                        }
+                        else if (isFirstRowFullySelected)
+                        {
+                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * (drawingRows - 1));
+                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + ((drawingRows - 1) * HEXSPACING_HEIGHT), (HEXBYTES_WIDTH * lastRowColumn) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
+
+                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * (drawingRows - 1));
+                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + ((drawingRows - 1) * HEXSPACING_HEIGHT), CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
+                        }
+                        else if (isLastRowFullySelected)
+                        {
+                            graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * (16 - firstRowColumn)) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
+                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * (drawingRows - 1));
+
+                            graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * (16 - firstRowColumn), HEXSPACING_HEIGHT);
+                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + HEXSPACING_HEIGHT, CHARWIDTH * 16, HEXSPACING_HEIGHT * (drawingRows - 1));
+                        }
+                        else
+                        {
+                            //Cannot be batched
+                            graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * (16 - firstRowColumn)) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
+                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * (drawingRows - 2));
+                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + ((drawingRows - 1) * HEXSPACING_HEIGHT), (HEXBYTES_WIDTH * lastRowColumn) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
+
+                            graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * (16 - firstRowColumn), HEXSPACING_HEIGHT);
+                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + HEXSPACING_HEIGHT, CHARWIDTH * 16, HEXSPACING_HEIGHT * (drawingRows - 2));
+                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + ((drawingRows - 1) * HEXSPACING_HEIGHT), CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
+                        }
+                    break;
+                    case 1:
+                        graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * regionLength) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
+                        graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * regionLength, HEXSPACING_HEIGHT);
+                    break;
+                    case 2:
+                        if (isFirstRowFullySelected && isLastRowFullySelected)
+                        {
+                            //Can be batched
+                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * 2);
+                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
+                        }
+                        else
+                        {
+                            if (isLastRowFullySelected)
+                            {
+                                lastRowColumn = 16;
+                            }
+                            graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * (16 - firstRowColumn)) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
+                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * lastRowColumn) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
+
+                            graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * (16 - firstRowColumn), HEXSPACING_HEIGHT);
+                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + HEXSPACING_HEIGHT, CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
+                        }
+                    break;
+                }
             }
-            //*/
-            /*
-            for (int times3 = 0; times3 < 16; times3++)
-            {
-                const int xd = 80;
-                e.Graphics.DrawLine(Pens.Black, xd + (times3 * HEXBYTES_WIDTH), 0, xd + (times3 * HEXBYTES_WIDTH), this.Height);
-            }
-            for (int times4 = 0; times4 < 20; times4++)
-            {
-                e.Graphics.DrawLine(Pens.Black, 0, 20 + (times4 * HEXSPACING_HEIGHT), this.Width, 20 + (times4 * HEXSPACING_HEIGHT));
-            }
-            //*/
         }
         private int GetCaretHexXPos(int caretColumn)
         {
@@ -697,7 +923,7 @@ namespace ScriptableHexEditor
         }
         private int GetCaretYPos(int caretRow)
         {
-            return 25 + (caretRow * HEXSPACING_HEIGHT);
+            return 25 + ((caretRow - scrollBar.Value) * HEXSPACING_HEIGHT);
         }
         protected override bool IsInputKey(Keys keyData)
         {
@@ -713,21 +939,42 @@ namespace ScriptableHexEditor
                 case Keys.Shift | Keys.Up:
                 case Keys.Shift | Keys.Down:
                     return true;
+                case Keys.Control | Keys.Right:
+                case Keys.Control | Keys.Left:
+                case Keys.Control | Keys.Up:
+                case Keys.Control | Keys.Down:
+                    return true;
+                case Keys.Control | Keys.Shift | Keys.Right:
+                case Keys.Control | Keys.Shift | Keys.Left:
+                case Keys.Control | Keys.Shift | Keys.Up:
+                case Keys.Control | Keys.Shift | Keys.Down:
+                    return true;
             }
             return base.IsInputKey(keyData);
         }
         protected override void OnGotFocus(EventArgs e)
         {
             CreateCaret(this.Handle, IntPtr.Zero, 2, HEXSPACING_HEIGHT);
-            SetCaretPos(GetCaretHexXPos(selectionStart % 16), GetCaretYPos(selectionStart / 16));
+            virtualCaret.Visible = true;
             ShowCaret(this.Handle);
+            UpdateCaretPositions();
+            caretHidden = false;
             base.OnGotFocus(e);
         }
         protected override void OnLostFocus(EventArgs e)
         {
+            virtualCaret.Visible = false;
             DestroyCaret();
+            caretHidden = true;
             base.OnLostFocus(e);
         }
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            dataStream.Dispose();
+            dataReader.Close();
+        }
         public event EventHandler SelectionChanged;
+        public event ScriptDoneHandler ScriptDone;
     }
 }
