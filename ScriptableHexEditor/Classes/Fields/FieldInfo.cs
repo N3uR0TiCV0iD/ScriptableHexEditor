@@ -25,13 +25,14 @@ namespace ScriptableHexEditor
         protected int length;
         string name;
         int fileOffset;
-        FieldType type;
-        public FieldInfo(int fileOffset, FieldType type)
+        FieldType fieldType;
+        public FieldInfo(int fileOffset, int length, FieldType fieldType)
         {
+            this.length = length;
+            this.fieldType = fieldType;
             this.fileOffset = fileOffset;
-            this.type = type;
         }
-        public FieldInfo(string name, int fileOffset, FieldType type) : this(fileOffset, type)
+        public FieldInfo(string name, int fileOffset, int length, FieldType fieldType) : this(fileOffset, length, fieldType)
         {
             this.name = name;
         }
@@ -46,7 +47,7 @@ namespace ScriptableHexEditor
         {
             get
             {
-                return type;
+                return fieldType;
             }
         }
         public string Name
@@ -60,7 +61,7 @@ namespace ScriptableHexEditor
                 name = value;
             }
         }
-        public int Length
+        public virtual int Length
         {
             get
             {

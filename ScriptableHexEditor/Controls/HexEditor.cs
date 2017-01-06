@@ -5,13 +5,21 @@ using LuaInterface;
 using System.Drawing;
 using System.Diagnostics;
 using System.Windows.Forms;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 namespace ScriptableHexEditor
 {
     //Lots and lots of magic numbers here... Be prepared :^)
+    public delegate void DebugStringHandler(string message);
     public delegate void ScriptDoneHandler(IFieldContainer rootFields);
     public partial class HexEditor : Control
     {
+        public event DebugStringHandler DebugString; //TMP
+        private void Debug(string message)
+        {
+            DebugString?.Invoke(message);
+        }
+
         //TODO: Fields background/rectangle highlight (Can be disabled) | Fields tree view
         [DllImport("user32.dll")] private static extern bool CreateCaret(IntPtr hwnd, IntPtr hBMP, int width, int height);
         [DllImport("user32.dll")] private static extern bool SetCaretPos(int x, int y);
@@ -19,8 +27,17 @@ namespace ScriptableHexEditor
         [DllImport("user32.dll")] private static extern bool HideCaret(IntPtr hwnd);
         [DllImport("user32.dll")] private static extern bool DestroyCaret();
         const int CHARWIDTH = 10;
+        const int CaretHexXPos0 = 90; //GetCaretHexXPos(0)
+        const int CaretTextXPos0 = 572; //GetCaretTextXPos(0)
         const int HEXSPACING_HEIGHT = 20;
+        const int RECTFILL_OFFSET = 7;
+        const int RECTDRAW_OFFSET = 5;
         const int HEXBYTES_WIDTH = CHARWIDTH * 3;
+        const int RECTDRAW_HEXSTART = CaretHexXPos0 - 1;
+        const int RECTDRAW_TEXTSTART = CaretTextXPos0 - 1;
+        const int CaretTextXPos16 = 572 + (16 * CHARWIDTH);
+        const int RECTDRAW_HEXEND = CaretHexXPos16 - RECTDRAW_OFFSET;
+        const int CaretHexXPos16 = 90 + (16 * HEXBYTES_WIDTH) - (16 / 6);
         static readonly int TRIPLECLICK_TIME = SystemInformation.DoubleClickTime / 2;
         Stopwatch doubleClickStopwatch;
         HexEditorScript usingScript;
@@ -121,7 +138,7 @@ namespace ScriptableHexEditor
                     {
                         UpdateCaretPositions();
                     }
-                    OnSelectionChanged(false);
+                    OnSelectionChanged(false, true);
                 }
                 else
                 {
@@ -140,7 +157,7 @@ namespace ScriptableHexEditor
                 if (value >= 0)
                 {
                     selectionEnd = selectionStart + value;
-                    OnSelectionChanged(true);
+                    OnSelectionChanged(true, true);
                 }
                 else
                 {
@@ -264,6 +281,18 @@ namespace ScriptableHexEditor
                 virtualCaret.Width = VIRTUAL_HEXCARET_WIDTH;
             }
         }
+        private int GetCaretHexXPos(int caretColumn)
+        {
+            return CaretHexXPos0 + (caretColumn * HEXBYTES_WIDTH) - (caretColumn / 6);
+        }
+        private int GetCaretTextXPos(int caretColumn)
+        {
+            return CaretTextXPos0 + (caretColumn * CHARWIDTH);
+        }
+        private int GetCaretYPos(int caretRow)
+        {
+            return 25 + ((caretRow - scrollBar.Value) * HEXSPACING_HEIGHT);
+        }
         private void ScrollBar_MouseEnter(object sender, EventArgs e)
         {
             this.Cursor = Cursors.Default;
@@ -365,9 +394,13 @@ namespace ScriptableHexEditor
             selectionEnd = selectionStart + 16;
             OnSelectionChanged(true);
         }
-        protected virtual void OnSelectionChanged(bool selecting)
+        public void OnSelectionChanged(bool selecting)
         {
-            int selectionEndRow;
+            OnSelectionChanged(selecting, false);
+        }
+        protected virtual void OnSelectionChanged(bool selecting, bool outside)
+        {
+            int focusRow;
             int displayableRows = GetDisplayableRows();
             int lastVisibleRow = scrollBar.Value + displayableRows;
             this.selecting = selecting;
@@ -381,14 +414,14 @@ namespace ScriptableHexEditor
             {
                 SafeHideCaret();
             }
-            selectionEndRow = selectionEnd / 16;
-            if (selectionEndRow < scrollBar.Value)
+            focusRow = (!outside ? selectionEnd : selectionStart) / 16;
+            if (focusRow < scrollBar.Value)
             {
-                scrollBar.Value = selectionEndRow;
+                scrollBar.Value = focusRow;
             }
-            else if (selectionEndRow > (lastVisibleRow - 1))
+            else if (focusRow > (lastVisibleRow - 1))
             {
-                scrollBar.Value = selectionEndRow - displayableRows + 1;
+                scrollBar.Value = focusRow - displayableRows + 1;
             }
             SelectionChanged?.Invoke(this, EventArgs.Empty);
             wroteNibble = false;
@@ -768,11 +801,24 @@ namespace ScriptableHexEditor
             StringBuilder bytesString = new StringBuilder();
             StringBuilder asciiString = new StringBuilder();
             int selectionLength = selectionEnd - selectionStart;
-            e.Graphics.FillRectangle(SystemBrushes.Control, 0, 0, this.Width, this.Height);
+            e.Graphics.Clear(SystemColors.Control);
             e.Graphics.FillRectangle(Brushes.White, 85, 20, this.Width - 85, this.Height - 20);
+            if (usingScript != null)
+            {
+                FieldInfo currField;
+                for (int currFieldIndex = 0; currFieldIndex < usingScript.FieldsCount; currFieldIndex++)
+                {
+                    currField = usingScript.GetField(currFieldIndex);
+                    if (currField.GetType() == typeof(FieldContainerInfo))
+                    {
+                        PaintFieldContainer((FieldContainerInfo)currField, e.Graphics);
+                    }
+                }
+            }
             if (selectionLength != 0)
             {
                 int realSelectionStart;
+                RegionPaintInfo paintInfo;
                 if (selectionLength > 0)
                 {
                     //Forward selection
@@ -784,7 +830,11 @@ namespace ScriptableHexEditor
                     selectionLength = -selectionLength;
                     realSelectionStart = selectionEnd;
                 }
-                FillRectangleRegion(realSelectionStart, selectionLength, selectionBrush, e.Graphics);
+                paintInfo = PreparePaintRegion(realSelectionStart, selectionLength, false);
+                if (paintInfo != null)
+                {
+                    FillRectangleRegion(paintInfo, selectionBrush, e.Graphics);
+                }
             }
             e.Graphics.DrawLine(Pens.Black, 0, 20, this.Width, 20);
             e.Graphics.DrawLine(Pens.Black, 85, 0, 85, this.Height);
@@ -825,11 +875,38 @@ namespace ScriptableHexEditor
                 yPos += 20;
             }
         }
-        private void FillRectangleRegion(int regionStart, int regionLength, Brush brush, Graphics graphics)
+        private void PaintFieldContainer(FieldContainerInfo fieldContainer, Graphics graphics)
         {
-            const int CaretHexXPos0 = 90; //GetCaretHexXPos(0)
-            const int CaretTextXPos0 = 572; //GetCaretTextXPos(0)
-            const int HIGHLIGHT_XOFFSET = 7;
+            FieldInfo currField;
+            bool regionVisible = false;
+            if (fieldContainer.BackgroundBrush != null)
+            {
+                RegionPaintInfo fillPaintInfo = PreparePaintRegion(fieldContainer.FileOffset, fieldContainer.Length, false);
+                if (fillPaintInfo != null)
+                {
+                    FillRectangleRegion(fillPaintInfo, fieldContainer.BackgroundBrush, graphics);
+                    regionVisible = true;
+                }
+            }
+            if (fieldContainer.RectanglePen != null)
+            {
+                RegionPaintInfo drawPaintInfo = PreparePaintRegion(fieldContainer.FileOffset, fieldContainer.Length, true);
+                if (regionVisible || drawPaintInfo != null)
+                {
+                    DrawRectangleRegion(drawPaintInfo, 0, fieldContainer.RectanglePen, graphics);
+                }
+            }
+            for (int currFieldIndex = 0; currFieldIndex < fieldContainer.FieldsCount; currFieldIndex++)
+            {
+                currField = fieldContainer.GetField(currFieldIndex);
+                if (currField.GetType() == typeof(FieldContainerInfo))
+                {
+                    PaintFieldContainer((FieldContainerInfo)currField, graphics);
+                }
+            }
+        }
+        private RegionPaintInfo PreparePaintRegion(int regionStart, int regionLength, bool drawHidden)
+        {
             int regionEnd = regionStart + regionLength;
             int lastRowRow = regionEnd / 16;
             if (lastRowRow >= scrollBar.Value) //Is the last row hidden?
@@ -837,7 +914,7 @@ namespace ScriptableHexEditor
                 //No it isn't, therefore we have to draw at least 1 row
                 int firstRowColumn = regionStart % 16;
                 int firstRowRow = regionStart / 16;
-                if (firstRowRow < scrollBar.Value) //Is the first row hidden?
+                if (!drawHidden && firstRowRow < scrollBar.Value) //Is the first row hidden?
                 {
                     //Yes it is, this means there is a possibility of other rows being hidden as well. Let's change the region so that it is drawn in the visible area
                     int hiddenRows = scrollBar.Value - firstRowRow;
@@ -847,83 +924,205 @@ namespace ScriptableHexEditor
                 }
                 int lastRowColumn = regionEnd % 16;
                 int yStart = 25 + ((firstRowRow - scrollBar.Value) * HEXSPACING_HEIGHT);
-                int drawingRows = (int)Math.Ceiling((firstRowColumn + regionLength) / 16F);
-                bool isFirstRowFullySelected = firstRowColumn == 0 && regionLength >= 16;
-                bool isLastRowFullySelected = lastRowColumn == 0; //Since selection would end on the first byte of the next row :)
-                switch (drawingRows)
-                {
-                    default: //drawingRows > 2
-                        if (isFirstRowFullySelected && isLastRowFullySelected)
-                        {
-                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * drawingRows);
-                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * drawingRows);
-                        }
-                        else if (isFirstRowFullySelected)
-                        {
-                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * (drawingRows - 1));
-                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + ((drawingRows - 1) * HEXSPACING_HEIGHT), (HEXBYTES_WIDTH * lastRowColumn) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
+                return new RegionPaintInfo(new RegionRow(firstRowRow, firstRowColumn), new RegionRow(lastRowRow, lastRowColumn), regionLength, yStart);
+            }
+            return null;
+        }
+        private void FillRectangleRegion(RegionPaintInfo paintInfo, Brush brush, Graphics graphics)
+        {
+            switch (paintInfo.DrawingRows)
+            {
+                default: //region.DrawingRows > 2
+                    if (paintInfo.DrawEntireFirstRow && paintInfo.DrawEntireLastRow)
+                    {
+                        graphics.FillRectangle(brush, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - RECTFILL_OFFSET, HEXSPACING_HEIGHT * paintInfo.DrawingRows);
+                        graphics.FillRectangle(brush, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * paintInfo.DrawingRows);
+                    }
+                    else if (paintInfo.DrawEntireFirstRow)
+                    {
+                        graphics.FillRectangle(brush, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - RECTFILL_OFFSET, HEXSPACING_HEIGHT * (paintInfo.DrawingRows - 1));
+                        graphics.FillRectangle(brush, CaretHexXPos0, paintInfo.YStart + ((paintInfo.DrawingRows - 1) * HEXSPACING_HEIGHT), (HEXBYTES_WIDTH * paintInfo.LastRowColumn) - RECTFILL_OFFSET, HEXSPACING_HEIGHT);
 
-                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * (drawingRows - 1));
-                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + ((drawingRows - 1) * HEXSPACING_HEIGHT), CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
-                        }
-                        else if (isLastRowFullySelected)
-                        {
-                            graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * (16 - firstRowColumn)) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * (drawingRows - 1));
+                        graphics.FillRectangle(brush, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * (paintInfo.DrawingRows - 1));
+                        graphics.FillRectangle(brush, CaretTextXPos0, paintInfo.YStart + ((paintInfo.DrawingRows - 1) * HEXSPACING_HEIGHT), CHARWIDTH * paintInfo.LastRowColumn, HEXSPACING_HEIGHT);
+                    }
+                    else if (paintInfo.DrawEntireLastRow)
+                    {
+                        graphics.FillRectangle(brush, GetCaretHexXPos(paintInfo.FirstRowColumn), paintInfo.YStart, (HEXBYTES_WIDTH * (16 - paintInfo.FirstRowColumn)) - RECTFILL_OFFSET, HEXSPACING_HEIGHT);
+                        graphics.FillRectangle(brush, CaretHexXPos0, paintInfo.YStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * 16) - RECTFILL_OFFSET, HEXSPACING_HEIGHT * (paintInfo.DrawingRows - 1));
 
-                            graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * (16 - firstRowColumn), HEXSPACING_HEIGHT);
-                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + HEXSPACING_HEIGHT, CHARWIDTH * 16, HEXSPACING_HEIGHT * (drawingRows - 1));
+                        graphics.FillRectangle(brush, GetCaretTextXPos(paintInfo.FirstRowColumn), paintInfo.YStart, CHARWIDTH * (16 - paintInfo.FirstRowColumn), HEXSPACING_HEIGHT);
+                        graphics.FillRectangle(brush, CaretTextXPos0, paintInfo.YStart + HEXSPACING_HEIGHT, CHARWIDTH * 16, HEXSPACING_HEIGHT * (paintInfo.DrawingRows - 1));
+                    }
+                    else
+                    {
+                        //Cannot be batched
+                        graphics.FillRectangle(brush, GetCaretHexXPos(paintInfo.FirstRowColumn), paintInfo.YStart, (HEXBYTES_WIDTH * (16 - paintInfo.FirstRowColumn)) - RECTFILL_OFFSET, HEXSPACING_HEIGHT);
+                        graphics.FillRectangle(brush, CaretHexXPos0, paintInfo.YStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * 16) - RECTFILL_OFFSET, HEXSPACING_HEIGHT * (paintInfo.DrawingRows - 2));
+                        graphics.FillRectangle(brush, CaretHexXPos0, paintInfo.YStart + ((paintInfo.DrawingRows - 1) * HEXSPACING_HEIGHT), (HEXBYTES_WIDTH * paintInfo.LastRowColumn) - RECTFILL_OFFSET, HEXSPACING_HEIGHT);
+
+                        graphics.FillRectangle(brush, GetCaretTextXPos(paintInfo.FirstRowColumn), paintInfo.YStart, CHARWIDTH * (16 - paintInfo.FirstRowColumn), HEXSPACING_HEIGHT);
+                        graphics.FillRectangle(brush, CaretTextXPos0, paintInfo.YStart + HEXSPACING_HEIGHT, CHARWIDTH * 16, HEXSPACING_HEIGHT * (paintInfo.DrawingRows - 2));
+                        graphics.FillRectangle(brush, CaretTextXPos0, paintInfo.YStart + ((paintInfo.DrawingRows - 1) * HEXSPACING_HEIGHT), CHARWIDTH * paintInfo.LastRowColumn, HEXSPACING_HEIGHT);
+                    }
+                break;
+                case 1:
+                    graphics.FillRectangle(brush, GetCaretHexXPos(paintInfo.FirstRowColumn), paintInfo.YStart, (HEXBYTES_WIDTH * paintInfo.RegionLength) - RECTFILL_OFFSET, HEXSPACING_HEIGHT);
+                    graphics.FillRectangle(brush, GetCaretTextXPos(paintInfo.FirstRowColumn), paintInfo.YStart, CHARWIDTH * paintInfo.RegionLength, HEXSPACING_HEIGHT);
+                break;
+                case 2:
+                    if (paintInfo.DrawEntireFirstRow && paintInfo.DrawEntireLastRow)
+                    {
+                        //Can be batched
+                        graphics.FillRectangle(brush, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - RECTFILL_OFFSET, HEXSPACING_HEIGHT * 2);
+                        graphics.FillRectangle(brush, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
+                    }
+                    else
+                    {
+                        int lastRowColumn;
+                        if (!paintInfo.DrawEntireLastRow)
+                        {
+                            lastRowColumn = paintInfo.LastRowColumn;
                         }
                         else
                         {
-                            //Cannot be batched
-                            graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * (16 - firstRowColumn)) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * (drawingRows - 2));
-                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + ((drawingRows - 1) * HEXSPACING_HEIGHT), (HEXBYTES_WIDTH * lastRowColumn) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
+                            lastRowColumn = 16;
+                        }
+                        graphics.FillRectangle(brush, GetCaretHexXPos(paintInfo.FirstRowColumn), paintInfo.YStart, (HEXBYTES_WIDTH * (16 - paintInfo.FirstRowColumn)) - RECTFILL_OFFSET, HEXSPACING_HEIGHT);
+                        graphics.FillRectangle(brush, CaretHexXPos0, paintInfo.YStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * lastRowColumn) - RECTFILL_OFFSET, HEXSPACING_HEIGHT);
 
-                            graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * (16 - firstRowColumn), HEXSPACING_HEIGHT);
-                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + HEXSPACING_HEIGHT, CHARWIDTH * 16, HEXSPACING_HEIGHT * (drawingRows - 2));
-                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + ((drawingRows - 1) * HEXSPACING_HEIGHT), CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
-                        }
-                    break;
-                    case 1:
-                        graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * regionLength) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-                        graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * regionLength, HEXSPACING_HEIGHT);
-                    break;
-                    case 2:
-                        if (isFirstRowFullySelected && isLastRowFullySelected)
-                        {
-                            //Can be batched
-                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart, (HEXBYTES_WIDTH * 16) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT * 2);
-                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
-                        }
-                        else
-                        {
-                            if (isLastRowFullySelected)
-                            {
-                                lastRowColumn = 16;
-                            }
-                            graphics.FillRectangle(selectionBrush, GetCaretHexXPos(firstRowColumn), yStart, (HEXBYTES_WIDTH * (16 - firstRowColumn)) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-                            graphics.FillRectangle(selectionBrush, CaretHexXPos0, yStart + HEXSPACING_HEIGHT, (HEXBYTES_WIDTH * lastRowColumn) - HIGHLIGHT_XOFFSET, HEXSPACING_HEIGHT);
-
-                            graphics.FillRectangle(selectionBrush, GetCaretTextXPos(firstRowColumn), yStart, CHARWIDTH * (16 - firstRowColumn), HEXSPACING_HEIGHT);
-                            graphics.FillRectangle(selectionBrush, CaretTextXPos0, yStart + HEXSPACING_HEIGHT, CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
-                        }
-                    break;
-                }
+                        graphics.FillRectangle(brush, GetCaretTextXPos(paintInfo.FirstRowColumn), paintInfo.YStart, CHARWIDTH * (16 - paintInfo.FirstRowColumn), HEXSPACING_HEIGHT);
+                        graphics.FillRectangle(brush, CaretTextXPos0, paintInfo.YStart + HEXSPACING_HEIGHT, CHARWIDTH * lastRowColumn, HEXSPACING_HEIGHT);
+                    }
+                break;
             }
         }
-        private int GetCaretHexXPos(int caretColumn)
+        private void DrawRectangleRegion(RegionPaintInfo paintInfo, int level, Pen pen, Graphics graphics)
         {
-            return 90 + (caretColumn * HEXBYTES_WIDTH) - (caretColumn / 6);
+            switch (paintInfo.DrawingRows)
+            {
+                default: //region.DrawingRows > 2
+                    if (paintInfo.DrawEntireFirstRow && paintInfo.DrawEntireLastRow)
+                    {
+                        graphics.DrawRectangle(pen, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - 0, HEXSPACING_HEIGHT * paintInfo.DrawingRows);
+                        graphics.DrawRectangle(pen, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * paintInfo.DrawingRows);
+                    }
+                    else
+                    {
+                        DrawFirstRow(pen, paintInfo, graphics);
+                        DrawMiddleRows(pen, paintInfo, graphics);
+                        DrawLastRow(pen, paintInfo, graphics);
+                    }
+                break;
+                case 1:
+                    graphics.DrawRectangle(pen, GetCaretHexXPos(paintInfo.FirstRowColumn), paintInfo.YStart, (HEXBYTES_WIDTH * paintInfo.RegionLength), HEXSPACING_HEIGHT);
+                    graphics.DrawRectangle(pen, GetCaretTextXPos(paintInfo.FirstRowColumn), paintInfo.YStart, CHARWIDTH * paintInfo.RegionLength, HEXSPACING_HEIGHT);
+                break;
+                case 2:
+                    if (paintInfo.DrawEntireFirstRow && paintInfo.DrawEntireLastRow)
+                    {
+                        //Can be batched
+                        graphics.DrawRectangle(pen, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - 0, HEXSPACING_HEIGHT * 2);
+                        graphics.DrawRectangle(pen, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
+                    }
+                    else if (paintInfo.LastRowColumn > paintInfo.FirstRowColumn) //Do they meet each other? ie: Do they merge?
+                    {
+                        //Yes they do!
+                        DrawFirstRow(pen, paintInfo, graphics);
+                        DrawLastRow(pen, paintInfo, graphics);
+                    }
+                    else
+                    {
+                        //No they don't
+                        graphics.DrawRectangle(pen, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - 0, HEXSPACING_HEIGHT * 2);
+                        graphics.DrawRectangle(pen, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - 0, HEXSPACING_HEIGHT * 2);
+
+                        graphics.DrawRectangle(pen, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
+                        graphics.DrawRectangle(pen, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
+                    }
+                break;
+            }
         }
-        private int GetCaretTextXPos(int caretColumn)
+        private void DrawFirstRow(Pen pen, RegionPaintInfo paintInfo, Graphics graphics)
         {
-            return 572 + (caretColumn * CHARWIDTH);
+            int hexEndXPos;
+            int textEndXPos;
+            int hexStartXPos;
+            int textStartXPos;
+            int yPos = paintInfo.YStart - 1;
+            if (yPos > 0) //Will this row be visible at all?
+            {
+                int endYPos = yPos + HEXSPACING_HEIGHT;
+                if (yPos < 20) //Does it start in the visible area?
+                {
+                    //No it doesn't lets clamp the start
+                    yPos = 20;
+                }
+                if (!paintInfo.DrawEntireFirstRow)
+                {
+                    int length = (16 - paintInfo.FirstRowColumn);
+                    hexStartXPos = GetCaretHexXPos(paintInfo.FirstRowColumn) - 1;
+                    textStartXPos = GetCaretTextXPos(paintInfo.FirstRowColumn) - 1;
+                    hexEndXPos = hexStartXPos + (length * HEXBYTES_WIDTH) - RECTDRAW_OFFSET + 1;
+                    textEndXPos = textStartXPos + (length * CHARWIDTH) + 1;
+                }
+                else
+                {
+                    textStartXPos = CaretTextXPos0 - 1;
+                    hexStartXPos = CaretHexXPos0 - 1;
+                    textEndXPos = CaretTextXPos16;
+                    hexEndXPos = CaretHexXPos16;
+                }
+                graphics.DrawLine(pen, hexStartXPos, yPos, hexEndXPos, yPos); //Top line
+                graphics.DrawLine(pen, hexStartXPos, yPos, hexStartXPos, endYPos); //Left line
+                graphics.DrawLine(pen, hexEndXPos, yPos, hexEndXPos, endYPos); //Right line
+
+                graphics.DrawLine(pen, textStartXPos, yPos, textEndXPos, yPos); //Top line
+                graphics.DrawLine(pen, textStartXPos, yPos, textStartXPos, endYPos); //Left line
+                graphics.DrawLine(pen, textEndXPos, yPos, textEndXPos, endYPos); //Right line
+            }
         }
-        private int GetCaretYPos(int caretRow)
+        private void DrawMiddleRows(Pen pen, RegionPaintInfo paintInfo, Graphics graphics)
         {
-            return 25 + ((caretRow - scrollBar.Value) * HEXSPACING_HEIGHT);
+            int yStart = paintInfo.YStart + HEXSPACING_HEIGHT - 1;
+            if (yStart > 0) //Will this row be visible at all?
+            {
+                int endYPos = yStart + ((paintInfo.DrawingRows - 2) * HEXSPACING_HEIGHT) + 1;
+                if (yStart < 20) //Does it start in the visible area?
+                {
+                    //No it doesn't lets clamp the start
+                    yStart = 20;
+                }
+                if (paintInfo.FirstRowColumn != 0)
+                {
+                    graphics.DrawLine(pen, CaretHexXPos0, yStart, CaretHexXPos0 + (paintInfo.FirstRowColumn * HEXBYTES_WIDTH) - RECTDRAW_OFFSET + 1, yStart); //Top line
+                    graphics.DrawLine(pen, CaretTextXPos0, yStart, CaretTextXPos0 + (paintInfo.FirstRowColumn * CHARWIDTH) - 2, yStart); //Top line
+                }
+                if (paintInfo.LastRowColumn != 0)
+                {
+                    graphics.DrawLine(pen, GetCaretHexXPos(paintInfo.LastRowColumn) - 1, endYPos, CaretHexXPos16 - RECTDRAW_OFFSET, endYPos); //Bottom line
+                    graphics.DrawLine(pen, GetCaretTextXPos(paintInfo.LastRowColumn), endYPos, CaretTextXPos16, endYPos); //Bottom line
+                }
+                graphics.DrawLine(pen, RECTDRAW_HEXSTART, yStart, RECTDRAW_HEXSTART, endYPos); //Left line
+                graphics.DrawLine(pen, RECTDRAW_HEXEND, yStart, RECTDRAW_HEXEND, endYPos); //Right line
+
+                graphics.DrawLine(pen, RECTDRAW_TEXTSTART, yStart, RECTDRAW_TEXTSTART, endYPos); //Left line
+                graphics.DrawLine(pen, CaretTextXPos16, yStart, CaretTextXPos16, endYPos); //Right line
+            }
+        }
+        private void DrawLastRow(Pen pen, RegionPaintInfo paintInfo, Graphics graphics)
+        {
+            int hexEndXPos = RECTDRAW_HEXSTART + (HEXBYTES_WIDTH * paintInfo.LastRowColumn) - 2;
+            int textEndXPos = RECTDRAW_TEXTSTART + (CHARWIDTH * paintInfo.LastRowColumn) + 1;
+            int yPos = paintInfo.YStart + (HEXSPACING_HEIGHT * (paintInfo.DrawingRows - 1));
+            int endYPos = yPos + HEXSPACING_HEIGHT;
+            graphics.DrawLine(pen, RECTDRAW_HEXSTART, endYPos, hexEndXPos, endYPos); //Bottom line
+            graphics.DrawLine(pen, RECTDRAW_HEXSTART, yPos, RECTDRAW_HEXSTART, endYPos); //Left line
+            graphics.DrawLine(pen, hexEndXPos, yPos, hexEndXPos, endYPos); //Right line
+
+            graphics.DrawLine(pen, RECTDRAW_TEXTSTART, endYPos, textEndXPos, endYPos); //Bottom line
+            graphics.DrawLine(pen, RECTDRAW_TEXTSTART, yPos, RECTDRAW_TEXTSTART, endYPos); //Left line
+            graphics.DrawLine(pen, textEndXPos, yPos, textEndXPos, endYPos); //Right line
         }
         protected override bool IsInputKey(Keys keyData)
         {

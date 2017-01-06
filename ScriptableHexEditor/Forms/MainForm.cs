@@ -15,7 +15,32 @@ namespace ScriptableHexEditor
             InitializeComponent();
             this.recentFilesList = new List<string>();
             this.hexEditor1.ScriptDone += HexEditor1_ScriptDone;
+            //this.fieldsView.GotFocus += FieldsView_GotFocus;
+            this.hexEditor1.DebugString += HexEditor1_DebugString; //TMP
+            this.fieldsView.MouseWheel += FieldsView_MouseWheel;
         }
+        private void FieldsView_MouseWheel(object sender, MouseEventArgs e)
+        {
+            Control fieldsViewer = (Control)sender;
+            if (!fieldsViewer.Bounds.Contains(e.Location))
+            {
+                if (e.Delta > 0)
+                {
+                    hexEditor1.ScrollUp();
+                }
+                else
+                {
+                    hexEditor1.ScrollDown();
+                }
+                ((HandledMouseEventArgs)e).Handled = true;
+            }
+        }
+        //TMP
+        private void HexEditor1_DebugString(string message)
+        {
+            this.Text += " " + message;
+        }
+        //END TMP
         private void MainForm_Load(object sender, EventArgs e)
         {
             using (RegistryKey appRegistryKey = Registry.CurrentUser.OpenSubKey("Software\\HiT\\ScriptableHexEditor"))
@@ -70,6 +95,10 @@ namespace ScriptableHexEditor
             fieldsView.Nodes.Clear();
             this.rootFields = rootFields;
             AddFieldsToNode(fieldsView.Nodes, rootFields);
+            foreach (TreeNode currRootNode in fieldsView.Nodes)
+            {
+                currRootNode.Expand();
+            }
         }
         private void AddFieldsToNode(TreeNodeCollection targetNodes, IFieldContainer fieldsContainer)
         {
@@ -87,9 +116,15 @@ namespace ScriptableHexEditor
         }
         private void fieldsView_AfterSelect(object sender, TreeViewEventArgs e)
         {
+            FieldInfo selectedFieldInfo = GetFieldFromNode(e.Node);
+            hexEditor1.SelectionStart = selectedFieldInfo.FileOffset;
+            hexEditor1.SelectionLength = selectedFieldInfo.Length;
+        }
+        private FieldInfo GetFieldFromNode(TreeNode node)
+        {
             IFieldContainer currFieldContainer = rootFields;
             Stack<int> fieldIndices = new Stack<int>();
-            TreeNode currNode = e.Node;
+            TreeNode currNode = node;
             while (currNode != null)
             {
                 fieldIndices.Push(currNode.Index);
@@ -99,7 +134,33 @@ namespace ScriptableHexEditor
             {
                 currFieldContainer = (IFieldContainer)currFieldContainer.GetField(fieldIndices.Pop());
             }
-            hexEditor1.SelectionStart = currFieldContainer.GetField(fieldIndices.Pop()).FileOffset;
+            return currFieldContainer.GetField(fieldIndices.Pop());
+        }
+        private void fieldsView_MouseDown(object sender, MouseEventArgs e)
+        {
+            TreeNode node = fieldsView.GetNodeAt(e.X, e.Y);
+            if (node != null && node.Bounds.Contains(e.X, e.Y))
+            {
+                fieldsView.SelectedNode = node;
+            }
+        }
+        private void fieldsView_DrawNode(object sender, DrawTreeNodeEventArgs e)
+        {
+            if (!e.Node.TreeView.Focused && e.Node == e.Node.TreeView.SelectedNode)
+            {
+                Font treeFont = e.Node.NodeFont ?? e.Node.TreeView.Font;
+                e.Graphics.FillRectangle(SystemBrushes.Highlight, e.Bounds);
+                ControlPaint.DrawFocusRectangle(e.Graphics, e.Bounds, SystemColors.HighlightText, SystemColors.Highlight);
+                TextRenderer.DrawText(e.Graphics, e.Node.Text, treeFont, e.Bounds, SystemColors.HighlightText, TextFormatFlags.GlyphOverhangPadding);
+            }
+            else
+            {
+                e.DrawDefault = true;
+            }
+        }
+        private void fieldsView_NodeMouseDoubleClick(object sender, TreeNodeMouseClickEventArgs e)
+        {
+            //MessageBox.Show(GetFieldFromNode(e.Node).Type.ToString());
         }
         private void exitMenuItem_Click(object sender, EventArgs e)
         {

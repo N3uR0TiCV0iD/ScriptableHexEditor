@@ -58,16 +58,22 @@
             // 
             // fieldsView
             // 
-            this.fieldsView.Dock = System.Windows.Forms.DockStyle.Left;
+            this.fieldsView.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.fieldsView.DrawMode = System.Windows.Forms.TreeViewDrawMode.OwnerDrawText;
+            this.fieldsView.HideSelection = false;
             this.fieldsView.Location = new System.Drawing.Point(3, 3);
             this.fieldsView.Name = "fieldsView";
-            this.fieldsView.Size = new System.Drawing.Size(255, 383);
+            this.fieldsView.Size = new System.Drawing.Size(158, 458);
             this.fieldsView.TabIndex = 2;
+            this.fieldsView.DrawNode += new System.Windows.Forms.DrawTreeNodeEventHandler(this.fieldsView_DrawNode);
             this.fieldsView.AfterSelect += new System.Windows.Forms.TreeViewEventHandler(this.fieldsView_AfterSelect);
+            this.fieldsView.NodeMouseDoubleClick += new System.Windows.Forms.TreeNodeMouseClickEventHandler(this.fieldsView_NodeMouseDoubleClick);
+            this.fieldsView.MouseDown += new System.Windows.Forms.MouseEventHandler(this.fieldsView_MouseDown);
             // 
             // listBox1
             // 
-            this.listBox1.Dock = System.Windows.Forms.DockStyle.Right;
+            this.listBox1.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
+            | System.Windows.Forms.AnchorStyles.Right)));
             this.listBox1.FormattingEnabled = true;
             this.listBox1.Items.AddRange(new object[] {
             "byte\t[VALUE]",
@@ -76,13 +82,16 @@
             "ushort\t[VALUE]",
             "int\t[VALUE]",
             "uint\t[VALUE]",
-            "uint64\t[VALUE]",
+            "long\t[VALUE]",
+            "ulong\t[VALUE]",
             "half float\t[VALUE]",
             "float\t[VALUE]",
-            "double\t[VALUE]"});
-            this.listBox1.Location = new System.Drawing.Point(1012, 3);
+            "double\t[VALUE]",
+            "bool\t[VALUE]",
+            "enum\t[VALUE]"});
+            this.listBox1.Location = new System.Drawing.Point(923, 67);
             this.listBox1.Name = "listBox1";
-            this.listBox1.Size = new System.Drawing.Size(108, 383);
+            this.listBox1.Size = new System.Drawing.Size(120, 472);
             this.listBox1.TabIndex = 1;
             // 
             // mainMenu
@@ -96,7 +105,7 @@
             this.mainMenu.Location = new System.Drawing.Point(0, 0);
             this.mainMenu.Name = "mainMenu";
             this.mainMenu.RenderMode = System.Windows.Forms.ToolStripRenderMode.Professional;
-            this.mainMenu.Size = new System.Drawing.Size(1156, 24);
+            this.mainMenu.Size = new System.Drawing.Size(1043, 24);
             this.mainMenu.TabIndex = 1;
             this.mainMenu.Text = "menuStrip1";
             // 
@@ -201,25 +210,25 @@
             // 
             // tabControl1
             // 
-            this.tabControl1.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
-            | System.Windows.Forms.AnchorStyles.Left)));
+            this.tabControl1.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
+            | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
             this.tabControl1.Controls.Add(this.tabPage1);
             this.tabControl1.Controls.Add(this.tabPage2);
             this.tabControl1.Location = new System.Drawing.Point(0, 47);
             this.tabControl1.Name = "tabControl1";
             this.tabControl1.SelectedIndex = 0;
-            this.tabControl1.Size = new System.Drawing.Size(1131, 415);
+            this.tabControl1.Size = new System.Drawing.Size(924, 490);
             this.tabControl1.TabIndex = 0;
             // 
             // tabPage1
             // 
-            this.tabPage1.Controls.Add(this.hexEditor1);
-            this.tabPage1.Controls.Add(this.listBox1);
             this.tabPage1.Controls.Add(this.fieldsView);
+            this.tabPage1.Controls.Add(this.hexEditor1);
             this.tabPage1.Location = new System.Drawing.Point(4, 22);
             this.tabPage1.Name = "tabPage1";
             this.tabPage1.Padding = new System.Windows.Forms.Padding(3);
-            this.tabPage1.Size = new System.Drawing.Size(1123, 389);
+            this.tabPage1.Size = new System.Drawing.Size(916, 464);
             this.tabPage1.TabIndex = 0;
             this.tabPage1.Text = "tabPage1";
             this.tabPage1.UseVisualStyleBackColor = true;
@@ -229,7 +238,7 @@
             this.tabPage2.Location = new System.Drawing.Point(4, 22);
             this.tabPage2.Name = "tabPage2";
             this.tabPage2.Padding = new System.Windows.Forms.Padding(3);
-            this.tabPage2.Size = new System.Drawing.Size(1123, 389);
+            this.tabPage2.Size = new System.Drawing.Size(916, 464);
             this.tabPage2.TabIndex = 1;
             this.tabPage2.Text = "tabPage2";
             this.tabPage2.UseVisualStyleBackColor = true;
@@ -239,19 +248,19 @@
             this.toolMenuStrip.Location = new System.Drawing.Point(0, 24);
             this.toolMenuStrip.Name = "toolMenuStrip";
             this.toolMenuStrip.RenderMode = System.Windows.Forms.ToolStripRenderMode.System;
-            this.toolMenuStrip.Size = new System.Drawing.Size(1156, 25);
+            this.toolMenuStrip.Size = new System.Drawing.Size(1043, 25);
             this.toolMenuStrip.TabIndex = 2;
             // 
             // hexEditor1
             // 
-            this.hexEditor1.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.hexEditor1.Dock = System.Windows.Forms.DockStyle.Right;
             this.hexEditor1.Font = new System.Drawing.Font("Courier New", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.hexEditor1.Location = new System.Drawing.Point(258, 3);
+            this.hexEditor1.Location = new System.Drawing.Point(161, 3);
             this.hexEditor1.Name = "hexEditor1";
             this.hexEditor1.SelectionColor = System.Drawing.SystemColors.Highlight;
             this.hexEditor1.SelectionLength = 0;
             this.hexEditor1.SelectionStart = 0;
-            this.hexEditor1.Size = new System.Drawing.Size(754, 383);
+            this.hexEditor1.Size = new System.Drawing.Size(752, 458);
             this.hexEditor1.TabIndex = 3;
             this.hexEditor1.Text = "hexEditor2";
             // 
@@ -259,13 +268,11 @@
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1156, 462);
+            this.ClientSize = new System.Drawing.Size(1043, 537);
+            this.Controls.Add(this.listBox1);
             this.Controls.Add(this.tabControl1);
             this.Controls.Add(this.toolMenuStrip);
             this.Controls.Add(this.mainMenu);
-            this.MaximizeBox = false;
-            this.MaximumSize = new System.Drawing.Size(9999, 1000);
-            this.MinimumSize = new System.Drawing.Size(1010, 500);
             this.Name = "MainForm";
             this.Text = "0";
             this.FormClosed += new System.Windows.Forms.FormClosedEventHandler(this.MainForm_FormClosed);
