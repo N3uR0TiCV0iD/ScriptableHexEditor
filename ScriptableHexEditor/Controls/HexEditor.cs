@@ -11,16 +11,16 @@ namespace ScriptableHexEditor
 {
     //Lots and lots of magic numbers here... Be prepared :^)
     public delegate void DebugStringHandler(string message);
-    public delegate void ScriptDoneHandler(IFieldContainer rootFields);
+    public delegate void ScriptDoneHandler(IFieldsContainer rootFields);
     public partial class HexEditor : Control
     {
-        public event DebugStringHandler DebugString; //TMP
-        private void Debug(string message)
+        //TMP
+        public event DebugStringHandler DebugString;
+        private void Log(string message)
         {
             DebugString?.Invoke(message);
         }
-
-        //TODO: Fields background/rectangle highlight (Can be disabled) | Fields tree view
+        //END TMP
         [DllImport("user32.dll")] private static extern bool CreateCaret(IntPtr hwnd, IntPtr hBMP, int width, int height);
         [DllImport("user32.dll")] private static extern bool SetCaretPos(int x, int y);
         [DllImport("user32.dll")] private static extern bool ShowCaret(IntPtr hwnd);
@@ -33,6 +33,7 @@ namespace ScriptableHexEditor
         const int RECTFILL_OFFSET = 7;
         const int RECTDRAW_OFFSET = 5;
         const int HEXBYTES_WIDTH = CHARWIDTH * 3;
+        const int RECTDRAW_TEXTEND = CaretTextXPos16;
         const int RECTDRAW_HEXSTART = CaretHexXPos0 - 1;
         const int RECTDRAW_TEXTSTART = CaretTextXPos0 - 1;
         const int CaretTextXPos16 = 572 + (16 * CHARWIDTH);
@@ -41,10 +42,11 @@ namespace ScriptableHexEditor
         static readonly int TRIPLECLICK_TIME = SystemInformation.DoubleClickTime / 2;
         Stopwatch doubleClickStopwatch;
         HexEditorScript usingScript;
+        bool updateStreamPosition;
         BinaryReader dataReader;
         MemoryStream dataStream;
-        SimpleLine virtualCaret;
         VScrollBar scrollBar;
+        Control virtualCaret;
         Color selectionColor;
         Brush selectionBrush;
         bool mouseSelecting;
@@ -62,7 +64,7 @@ namespace ScriptableHexEditor
             byte[] buffer = new byte[4096];
             this.scrollBar = new VScrollBar();
             this.Controls.Add(this.scrollBar);
-            this.virtualCaret = new SimpleLine();
+            this.virtualCaret = new Control();
             this.Controls.Add(this.virtualCaret);
             this.dataStream = new MemoryStream();
             this.scrollBar.Dock = DockStyle.Right;
@@ -73,7 +75,7 @@ namespace ScriptableHexEditor
             this.Font = new Font("Courier New", 12F, FontStyle.Regular, GraphicsUnit.Point, 0);
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.DoubleBuffer, true);
             //TMP
-            filePath = "C:\\Users\\Patrick\\AppData\\LocalLow\\DefaultCompany\\All-Mozart\\Sheets\\FRENCH SONG.msf";
+            filePath = "C:\\Users\\Patrick\\AppData\\LocalLow\\DefaultCompany\\All-Mozart\\Sheets\\Contest_Entry.msf";
             try
             {
                 using (FileStream editingFileStream = new FileStream(filePath, FileMode.Open))
@@ -123,11 +125,105 @@ namespace ScriptableHexEditor
                 selectionColor = value;
             }
         }
+        public FieldInfo SelectedField
+        {
+            get
+            {
+                return FindFieldAt(this.SelectionStart);
+            }
+        }
+        public int NextFieldOffset
+        {
+            get
+            {
+                FieldInfo selectedField = FindFieldAt(selectionEnd);
+                return selectedField.Length - (selectionEnd - selectedField.FileOffset);
+            }
+        }
+        public int PreviousFieldOffset
+        {
+            get
+            {
+                FieldInfo previousField = FindFieldAt(selectionEnd - 1);
+                return previousField.FileOffset - selectionEnd;
+            }
+        }
+        public int NextContainerOffset
+        {
+            get
+            {
+                FieldContainerInfo selectedContainer = FindContainerAt(selectionEnd);
+                if (selectedContainer != null)
+                {
+                    return selectedContainer.Length - (selectionEnd - selectedContainer.FileOffset);
+                }
+                else
+                {
+                    selectedContainer = usingScript.FirstContainer; //Reutilizing variable. It is technically nextContainer
+                    if (selectedContainer != null)
+                    {
+                        return selectedContainer.FileOffset - selectionEnd;
+                    }
+                    else
+                    {
+                        return (int)dataStream.Position - selectionEnd;
+                    }
+                }
+            }
+        }
+        public int PreviousContainerOffset
+        {
+            get
+            {
+                IFieldsContainer parentContainer;
+                FieldContainerInfo selectedContainer = FindContainerAt(selectionEnd);
+                if (selectedContainer != null)
+                {
+                    parentContainer = selectedContainer.ParentContainer;
+                    int fieldIndex = parentContainer.IndexOf(selectedContainer);
+                    if (fieldIndex != 0) //Are we the first field in the parent 
+                    {
+                        return parentContainer.GetField(fieldIndex - 1).FileOffset - selectionEnd;
+                    }
+                    else if (parentContainer.GetType() == typeof(FieldContainerInfo))
+                    {
+                        FieldInfo currField;
+                        selectedContainer = (FieldContainerInfo)parentContainer; //Reutilzing variable
+                        while (fieldIndex == 0)
+                        {
+                            parentContainer = selectedContainer.ParentContainer;
+                            fieldIndex = parentContainer.IndexOf(selectedContainer);
+                            //Keep going up
+                        }
+                        parentContainer = selectedContainer.ParentContainer;
+                        for (int currFieldIndex = fieldIndex - 1; currFieldIndex >= 0; currFieldIndex--)
+                        {
+                            currField = parentContainer.GetField(currFieldIndex);
+                            if (currField.GetType() == typeof(FieldContainerInfo))
+                            {
+                                parentContainer = (FieldContainerInfo)currField;
+                                return parentContainer.GetField(parentContainer.FieldsCount - 1).FileOffset - selectionEnd;
+                            }
+                        }
+                    }
+                }
+                return -selectionEnd;
+            }
+        }
         public int SelectionStart
         {
             get
             {
-                return selectionStart;
+                if (selectionEnd >= selectionStart)
+                {
+                    //Forward selection
+                    return selectionStart;
+                }
+                else
+                {
+                    //Backwards selection
+                    return selectionEnd;
+                }
             }
             set
             {
@@ -150,7 +246,7 @@ namespace ScriptableHexEditor
         {
             get
             {
-                return selectionEnd - selectionStart;
+                return Math.Abs(selectionEnd - selectionStart);
             }
             set
             {
@@ -199,9 +295,322 @@ namespace ScriptableHexEditor
                 this.Refresh();
             }
         }
+        public FieldInfo FindFieldAt(int fileOffset)
+        {
+            return usingScript != null ? usingScript.FindFieldAt(fileOffset) : null;
+        }
+        public FieldContainerInfo FindContainerAt(int fileOffset)
+        {
+            return usingScript != null ? usingScript.FindContainerAt(fileOffset) : null;
+        }
         public void FindHexBytes(string hexString)
         {
+        }
+        public string GetEnumKey(EnumFieldInfo enumField, int value)
+        {
+            return GetEnumKey(enumField.EnumName, value);
+        }
+        public string GetEnumKey(string enumName, int value)
+        {
+            return usingScript.GetEnumKey(enumName, value);
+        }
+        public byte[] ReadField(FieldInfo field)
+        {
+            dataStream.Position = field.FileOffset;
+            return dataReader.ReadBytes(field.Length);
+        }
+        public byte[] BulkRead()
+        {
+            return BulkRead(8);
+        }
+        public byte[] BulkRead(int max) //Reads up to MAX bytes
+        {
+            StreamPositionUpdateCheck();
+            for (int currTryBytes = max; currTryBytes >= 1; currTryBytes /= 2)
+            {
+                if (CanReadBytes(currTryBytes))
+                {
+                    return dataReader.ReadBytes(currTryBytes);
+                }
+            }
+            return null;
+        }
+        public bool PeekData(FieldType type, out object result)
+        {
+            if (ReadData(type, false, out result))
+            {
+                dataStream.Position -= GetFieldTypeLength(type);
+                return true;
+            }
+            return false;
+        }
+        public bool ReadData(FieldType type, out object result)
+        {
+            return ReadData(type, true, out result);
+        }
+        public bool ReadData(FieldType type, bool moveCaret, out object result)
+        {
+            StreamPositionUpdateCheck();
+            if ( CanReadBytes(GetFieldTypeLength(type)) )
+            {
+                switch (type)
+                {
+                    case FieldType.Byte:
+                        result = dataReader.ReadByte();
+                    break;
+                    case FieldType.SByte:
+                        result = dataReader.ReadSByte();
+                    break;
+                    case FieldType.Bool:
+                        result = dataReader.ReadBoolean();
+                    break;
+                    case FieldType.Short:
+                        result = dataReader.ReadInt16();
+                    break;
+                    case FieldType.UShort:
+                        result = dataReader.ReadUInt16();
+                    break;
+                    case FieldType.HalfFloat:
+                        result = Half.ToHalf(dataReader.ReadBytes(2), 0);
+                    break;
+                    case FieldType.Int:
+                        result = dataReader.ReadInt32();
+                    break;
+                    case FieldType.UInt:
+                        result = dataReader.ReadUInt32();
+                    break;
+                    case FieldType.Float:
+                        result = dataReader.ReadSingle();
+                    break;
+                    case FieldType.Long:
+                        result = dataReader.ReadInt64();
+                    break;
+                    case FieldType.ULong:
+                        result = dataReader.ReadUInt64();
+                    break;
+                    case FieldType.Double:
+                        result = dataReader.ReadDouble();
+                    break;
+                    default: throw new Exception();
+                }
+                if (moveCaret)
+                {
+                    selectionStart = (int)dataStream.Position;
+                    OnSelectionChanged(false, true);
+                }
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        private int GetFieldTypeLength(FieldType type)
+        {
+            switch (type)
+            {
+                case FieldType.Byte:
+                case FieldType.SByte:
+                case FieldType.Bool: return 1;
 
+                case FieldType.Short:
+                case FieldType.UShort:
+                case FieldType.HalfFloat: return 2;
+
+                case FieldType.Int:
+                case FieldType.UInt:
+                case FieldType.Float:
+                case FieldType.Enum: return 4;
+
+                case FieldType.Long:
+                case FieldType.ULong:
+                case FieldType.Double: return 8;
+
+                default: throw new Exception();
+            }
+        }
+        public bool PeekReadEnum(string enumName, out string result)
+        {
+            object objectResult;
+            if (PeekReadEnum(enumName, out objectResult))
+            {
+                result = objectResult.ToString();
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        public bool PeekReadEnum(string enumName, out object result)
+        {
+            if (ReadEnum(enumName, false, out result))
+            {
+                dataStream.Position -= 4;
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        public bool ReadEnum(string enumName, out string result)
+        {
+            return ReadEnum(enumName, true, out result);
+        }
+        public bool ReadEnum(string enumName, out object result)
+        {
+            return ReadEnum(enumName, true, out result);
+        }
+        public bool ReadEnum(string enumName, bool moveCaret, out string result)
+        {
+            object objectResult;
+            if (ReadEnum(enumName, moveCaret, out objectResult))
+            {
+                result = objectResult.ToString();
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        public bool ReadEnum(string enumName, bool moveCaret, out object result)
+        {
+            StreamPositionUpdateCheck();
+            if (usingScript != null && CanReadBytes(4))
+            {
+                int readValue;
+                readValue = dataReader.ReadInt32();
+                result = GetEnumKey(enumName, readValue);
+                if (moveCaret)
+                {
+                    selectionStart = (int)dataStream.Position;
+                    OnSelectionChanged(false, true);
+                }
+                return result.ToString() != readValue.ToString(); //Was it a valid enum?
+            }
+            result = null;
+            return false;
+        }
+        public bool PeekReadUTFString(out string result)
+        {
+            object objectResult;
+            if (PeekReadUTFString(out objectResult))
+            {
+                result = objectResult.ToString();
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        public bool PeekReadUTFString(out object result)
+        {
+            if (ReadUTFString(false, out result))
+            {
+                dataStream.Position -= result.ToString().Length + 1;
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        public bool ReadUTFString(out string result)
+        {
+            return ReadUTFString(true, out result);
+        }
+        public bool ReadUTFString(out object result)
+        {
+            return ReadUTFString(true, out result);
+        }
+        public bool ReadUTFString(bool moveCaret, out string result)
+        {
+            object objectResult;
+            if (ReadUTFString(moveCaret, out objectResult))
+            {
+                result = objectResult.ToString();
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        public bool ReadUTFString(bool moveCaret, out object result)
+        {
+            StreamPositionUpdateCheck();
+            try
+            {
+                result = dataReader.ReadString();
+                if (moveCaret)
+                {
+                    selectionStart = (int)dataStream.Position;
+                    OnSelectionChanged(false, true);
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                //throw ex;
+            }
+            result = null;
+            return false;
+        }
+        public bool PeekReadCString(out string result)
+        {
+            object objectResult;
+            if (PeekReadCString(out objectResult))
+            {
+                result = objectResult.ToString();
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        public bool PeekReadCString(out object result)
+        {
+            if (ReadCString(false, out result))
+            {
+                dataStream.Position -= result.ToString().Length + 1;
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        public bool ReadCString(out string result)
+        {
+            return ReadCString(true, out result);
+        }
+        public bool ReadCString(out object result)
+        {
+            return ReadCString(true, out result);
+        }
+        public bool ReadCString(bool moveCaret, out string result)
+        {
+            object objectResult;
+            if (ReadCString(moveCaret, out objectResult))
+            {
+                result = objectResult.ToString();
+                return true;
+            }
+            result = null;
+            return false;
+        }
+        public bool ReadCString(bool moveCaret, out object result)
+        {
+            StreamPositionUpdateCheck();
+            if (dataStream.Position != dataStream.Length)
+            {
+                try
+                {
+                    result = Utils.ReadCString(dataReader);
+                    if (moveCaret)
+                    {
+                        selectionStart = (int)dataStream.Position;
+                        OnSelectionChanged(false, true);
+                    }
+                    return true;
+                }
+                catch (Exception ex)
+                {
+
+                }
+            }
+            result = null;
+            return false;
+        }
+        private bool CanReadBytes(int length)
+        {
+            return (dataStream.Position + length - 1) < dataStream.Length;
         }
         public void ScrollUp()
         {
@@ -228,6 +637,14 @@ namespace ScriptableHexEditor
                 newValue = scrollBar.Maximum;
             }
             scrollBar.Value = newValue;
+        }
+        private void StreamPositionUpdateCheck()
+        {
+            if (updateStreamPosition)
+            {
+                dataStream.Position = this.SelectionStart;
+                updateStreamPosition = false;
+            }
         }
         private void ScrollBar_ValueChanged(object sender, EventArgs e)
         {
@@ -394,11 +811,11 @@ namespace ScriptableHexEditor
             selectionEnd = selectionStart + 16;
             OnSelectionChanged(true);
         }
-        public void OnSelectionChanged(bool selecting)
+        private void OnSelectionChanged(bool selecting)
         {
             OnSelectionChanged(selecting, false);
         }
-        protected virtual void OnSelectionChanged(bool selecting, bool outside)
+        protected virtual void OnSelectionChanged(bool selecting, bool changedOutside)
         {
             int focusRow;
             int displayableRows = GetDisplayableRows();
@@ -414,16 +831,42 @@ namespace ScriptableHexEditor
             {
                 SafeHideCaret();
             }
-            focusRow = (!outside ? selectionEnd : selectionStart) / 16;
-            if (focusRow < scrollBar.Value)
+            if (!changedOutside)
             {
-                scrollBar.Value = focusRow;
+                focusRow = selectionEnd / 16;
+                if (focusRow < scrollBar.Value)
+                {
+                    scrollBar.Value = focusRow;
+                }
+                else if (focusRow > (lastVisibleRow - 1))
+                {
+                    scrollBar.Value = focusRow - displayableRows + 1;
+                }
             }
-            else if (focusRow > (lastVisibleRow - 1))
+            else
             {
-                scrollBar.Value = focusRow - displayableRows + 1;
+                focusRow = selectionStart / 16;
+                if (focusRow < scrollBar.Value)
+                {
+                    int newRow = focusRow - (displayableRows / 3) - 1;
+                    if (newRow < scrollBar.Minimum)
+                    {
+                        newRow = scrollBar.Minimum;
+                    }
+                    scrollBar.Value = newRow;
+                }
+                else
+                {
+                    displayableRows /= 3;
+                    lastVisibleRow = scrollBar.Value + displayableRows;
+                    if (focusRow > (lastVisibleRow - 1))
+                    {
+                        scrollBar.Value = focusRow - displayableRows + 1;
+                    }
+                }
             }
             SelectionChanged?.Invoke(this, EventArgs.Empty);
+            updateStreamPosition = true;
             wroteNibble = false;
             this.Refresh();
         }
@@ -489,17 +932,18 @@ namespace ScriptableHexEditor
         }
         protected override void OnKeyDown(KeyEventArgs e)
         {
+            int newValue;
             int moveAmount;
             switch (e.KeyCode)
             {
                 case Keys.Right:
-                    if (!e.Control)
+                    if (!e.Control || usingScript == null)
                     {
                         moveAmount = 1;
                     }
                     else
                     {
-                        //TODO: Find the amount of bytes until the start of a next field and do moveAmount = ...
+                        moveAmount = this.NextFieldOffset;
                     }
                     if (!e.Shift)
                     {
@@ -507,7 +951,12 @@ namespace ScriptableHexEditor
                         {
                             if (selectionStart != dataStream.Length)
                             {
-                                selectionStart++;
+                                newValue = selectionStart + moveAmount;
+                                if (newValue > dataStream.Length)
+                                {
+                                    newValue = (int)dataStream.Length;
+                                }
+                                selectionStart = newValue;
                                 OnSelectionChanged(false);
                             }
                         }
@@ -529,18 +978,23 @@ namespace ScriptableHexEditor
                     }
                     else if (selectionEnd != dataStream.Length)
                     {
-                        selectionEnd++;
-                        OnSelectionChanged(true);
+                        newValue = selectionEnd + moveAmount;
+                        if (newValue > dataStream.Length)
+                        {
+                            newValue = (int)dataStream.Length;
+                        }
+                        selectionEnd = newValue;
+                        OnSelectionChanged(selectionStart != selectionEnd);
                     }
                 break;
                 case Keys.Left:
-                    if (!e.Control)
+                    if (!e.Control || usingScript == null)
                     {
-                        moveAmount = 1;
+                        moveAmount = -1;
                     }
                     else
                     {
-                        //TODO: Find the amount of bytes until the start of a previous field and do moveAmount = ...
+                        moveAmount = this.PreviousFieldOffset;
                     }
                     if (!e.Shift)
                     {
@@ -548,7 +1002,12 @@ namespace ScriptableHexEditor
                         {
                             if (selectionEnd != 0)
                             {
-                                selectionStart = selectionEnd - 1;
+                                newValue = selectionEnd + moveAmount;
+                                if (newValue < 0)
+                                {
+                                    newValue = 0;
+                                }
+                                selectionStart = newValue;
                                 OnSelectionChanged(false);
                             }
                         }
@@ -561,51 +1020,62 @@ namespace ScriptableHexEditor
                     }
                     else if (selectionEnd != 0)
                     {
-                        selectionEnd--;
-                        OnSelectionChanged(true);
+                        newValue = selectionEnd + moveAmount;
+                        if (newValue < 0)
+                        {
+                            newValue = 0;
+                        }
+                        selectionEnd = newValue;
+                        OnSelectionChanged(selectionStart != selectionEnd);
                     }
                 break;
                 case Keys.Up:
-                    if (!e.Control)
+                    if (!e.Control || usingScript == null)
                     {
-                        moveAmount = 16;
+                        moveAmount = -16;
                     }
                     else
                     {
-                        //TODO: Find the amount of bytes until the start of a previous structure and do moveAmount = ...
+                        moveAmount = this.PreviousContainerOffset;
                     }
                     if (!e.Shift)
                     {
-                        if (selectionEnd >= 16)
+                        if (selectionEnd != 0)
                         {
-                            selectionStart = selectionEnd - 16;
+                            newValue = selectionEnd + moveAmount;
+                            if (newValue < 0)
+                            {
+                                newValue = 0;
+                            }
+                            selectionStart = newValue;
+                            OnSelectionChanged(false);
                         }
-                        else
-                        {
-                            selectionStart = 0;
-                        }
-                        OnSelectionChanged(false);
                     }
-                    else if (selectionEnd >= 16)
+                    else if (selectionEnd != 0)
                     {
-                        selectionEnd -= 16;
-                        OnSelectionChanged(true);
+                        newValue = selectionEnd + moveAmount;
+                        if (newValue < 0)
+                        {
+                            newValue = 0;
+                        }
+                        selectionEnd = newValue;
+                        OnSelectionChanged(selectionStart != selectionEnd);
                     }
                 break;
                 case Keys.Down:
-                    if (!e.Control)
+                    if (!e.Control || usingScript == null)
                     {
                         moveAmount = 16;
                     }
                     else
                     {
-                        //TODO: Find the amount of bytes until the start of a next structure and do moveAmount = ...
+                        moveAmount = this.NextContainerOffset;
                     }
                     if (!e.Shift)
                     {
-                        if (selectionEnd <= (dataStream.Length - 16))
+                        if (selectionEnd <= (dataStream.Length - moveAmount))
                         {
-                            selectionStart = selectionEnd + 16;
+                            selectionStart = selectionEnd + moveAmount;
                         }
                         else
                         {
@@ -617,15 +1087,15 @@ namespace ScriptableHexEditor
                     }
                     else
                     {
-                        if (selectionEnd <= (dataStream.Length - 16))
+                        if (selectionEnd <= (dataStream.Length - moveAmount))
                         {
-                            selectionEnd += 16;
+                            selectionEnd += moveAmount;
                         }
                         else
                         {
                             selectionEnd = (int)dataStream.Length;
                         }
-                        OnSelectionChanged(true);
+                        OnSelectionChanged(selectionStart != selectionEnd);
                     }
                 break;
                 case Keys.Home:
@@ -637,7 +1107,7 @@ namespace ScriptableHexEditor
                     else
                     {
                         selectionEnd = 0;
-                        OnSelectionChanged(true);
+                        OnSelectionChanged(selectionStart != selectionEnd);
                     }
                 break;
                 case Keys.PageUp:
@@ -655,7 +1125,7 @@ namespace ScriptableHexEditor
                     else
                     {
                         selectionEnd = (int)dataStream.Length;
-                        OnSelectionChanged(true);
+                        OnSelectionChanged(selectionStart != selectionEnd);
                     }
                     ScrollDown();
                 break;
@@ -791,16 +1261,21 @@ namespace ScriptableHexEditor
         }
         protected override void OnPaint(PaintEventArgs e)
         {
-            int diff;
-            int times;
-            int yPos = 25;
-            byte readByte;
-            string fileOffset;
-            int caretRow = selectionStart / 16;
-            int caretColumn = selectionStart % 16;
+            List<FieldContainerInfo> paintingFieldContainers = new List<FieldContainerInfo>();
+            int selectionLength = selectionEnd - selectionStart;
             StringBuilder bytesString = new StringBuilder();
             StringBuilder asciiString = new StringBuilder();
-            int selectionLength = selectionEnd - selectionStart;
+            FieldContainerInfo currFieldContainer;
+            int caretColumn = selectionStart % 16;
+            int caretRow = selectionStart / 16;
+            RegionPaintInfo drawPaintInfo;
+            RegionPaintInfo fillPaintInfo;
+            bool[] visibleRegions;
+            string fileOffset;
+            int yPos = 25;
+            byte readByte;
+            int times;
+            int diff;
             e.Graphics.Clear(SystemColors.Control);
             e.Graphics.FillRectangle(Brushes.White, 85, 20, this.Width - 85, this.Height - 20);
             if (usingScript != null)
@@ -811,29 +1286,48 @@ namespace ScriptableHexEditor
                     currField = usingScript.GetField(currFieldIndex);
                     if (currField.GetType() == typeof(FieldContainerInfo))
                     {
-                        PaintFieldContainer((FieldContainerInfo)currField, e.Graphics);
+                        RememberFieldContainer((FieldContainerInfo)currField, paintingFieldContainers, e.Graphics);
+                    }
+                }
+                visibleRegions = new bool[paintingFieldContainers.Count];
+            }
+            else
+            {
+                visibleRegions = null;
+            }
+            for (int currContainerIndex = 0; currContainerIndex < paintingFieldContainers.Count; currContainerIndex++) //Draws FieldContainers that have a background
+            {
+                currFieldContainer = paintingFieldContainers[currContainerIndex];
+                if (currFieldContainer.BackgroundBrush != null)
+                {
+                    fillPaintInfo = PreparePaintRegion(currFieldContainer.FileOffset, currFieldContainer.Length, false);
+                    if (fillPaintInfo != null)
+                    {
+                        FillRectangleRegion(fillPaintInfo, currFieldContainer.BackgroundBrush, e.Graphics);
+                        visibleRegions[currContainerIndex] = true;
                     }
                 }
             }
             if (selectionLength != 0)
             {
-                int realSelectionStart;
                 RegionPaintInfo paintInfo;
-                if (selectionLength > 0)
-                {
-                    //Forward selection
-                    realSelectionStart = selectionStart;
-                }
-                else
-                {
-                    //Backwards selection
-                    selectionLength = -selectionLength;
-                    realSelectionStart = selectionEnd;
-                }
-                paintInfo = PreparePaintRegion(realSelectionStart, selectionLength, false);
+                paintInfo = PreparePaintRegion(this.SelectionStart, Math.Abs(selectionLength), false);
                 if (paintInfo != null)
                 {
                     FillRectangleRegion(paintInfo, selectionBrush, e.Graphics);
+                }
+            }
+            for (int currContainerIndex = 0; currContainerIndex < paintingFieldContainers.Count; currContainerIndex++)
+            {
+                currFieldContainer = paintingFieldContainers[currContainerIndex];
+                if (currFieldContainer.RectanglePen != null)
+                {
+                    drawPaintInfo = PreparePaintRegion(currFieldContainer.FileOffset, currFieldContainer.Length, true);
+                    if (visibleRegions[currContainerIndex] || drawPaintInfo != null)
+                    {
+                        //TODO: Make use of the LEVEL argument
+                        DrawRectangleRegion(drawPaintInfo, 0, currFieldContainer.RectanglePen, e.Graphics);
+                    }
                 }
             }
             e.Graphics.DrawLine(Pens.Black, 0, 20, this.Width, 20);
@@ -875,33 +1369,16 @@ namespace ScriptableHexEditor
                 yPos += 20;
             }
         }
-        private void PaintFieldContainer(FieldContainerInfo fieldContainer, Graphics graphics)
+        private void RememberFieldContainer(FieldContainerInfo fieldContainer, List<FieldContainerInfo> paintingFieldContainers, Graphics graphics)
         {
             FieldInfo currField;
-            bool regionVisible = false;
-            if (fieldContainer.BackgroundBrush != null)
-            {
-                RegionPaintInfo fillPaintInfo = PreparePaintRegion(fieldContainer.FileOffset, fieldContainer.Length, false);
-                if (fillPaintInfo != null)
-                {
-                    FillRectangleRegion(fillPaintInfo, fieldContainer.BackgroundBrush, graphics);
-                    regionVisible = true;
-                }
-            }
-            if (fieldContainer.RectanglePen != null)
-            {
-                RegionPaintInfo drawPaintInfo = PreparePaintRegion(fieldContainer.FileOffset, fieldContainer.Length, true);
-                if (regionVisible || drawPaintInfo != null)
-                {
-                    DrawRectangleRegion(drawPaintInfo, 0, fieldContainer.RectanglePen, graphics);
-                }
-            }
+            paintingFieldContainers.Add(fieldContainer);
             for (int currFieldIndex = 0; currFieldIndex < fieldContainer.FieldsCount; currFieldIndex++)
             {
                 currField = fieldContainer.GetField(currFieldIndex);
                 if (currField.GetType() == typeof(FieldContainerInfo))
                 {
-                    PaintFieldContainer((FieldContainerInfo)currField, graphics);
+                    RememberFieldContainer((FieldContainerInfo)currField, paintingFieldContainers, graphics);
                 }
             }
         }
@@ -1002,6 +1479,10 @@ namespace ScriptableHexEditor
             switch (paintInfo.DrawingRows)
             {
                 default: //region.DrawingRows > 2
+                    DrawFirstRow(pen, paintInfo, graphics);
+                    DrawMiddleRows(pen, paintInfo, graphics);
+                    DrawLastRow(pen, paintInfo, graphics);
+                    /*
                     if (paintInfo.DrawEntireFirstRow && paintInfo.DrawEntireLastRow)
                     {
                         graphics.DrawRectangle(pen, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - 0, HEXSPACING_HEIGHT * paintInfo.DrawingRows);
@@ -1009,37 +1490,23 @@ namespace ScriptableHexEditor
                     }
                     else
                     {
-                        DrawFirstRow(pen, paintInfo, graphics);
-                        DrawMiddleRows(pen, paintInfo, graphics);
-                        DrawLastRow(pen, paintInfo, graphics);
                     }
+                    */
                 break;
                 case 1:
                     graphics.DrawRectangle(pen, GetCaretHexXPos(paintInfo.FirstRowColumn), paintInfo.YStart, (HEXBYTES_WIDTH * paintInfo.RegionLength), HEXSPACING_HEIGHT);
                     graphics.DrawRectangle(pen, GetCaretTextXPos(paintInfo.FirstRowColumn), paintInfo.YStart, CHARWIDTH * paintInfo.RegionLength, HEXSPACING_HEIGHT);
                 break;
                 case 2:
-                    if (paintInfo.DrawEntireFirstRow && paintInfo.DrawEntireLastRow)
+                    DrawFirstRow(pen, paintInfo, graphics);
+                    if (paintInfo.LastRowColumn <= paintInfo.FirstRowColumn) //Do they meet each other? ie: Do they merge?
                     {
-                        //Can be batched
-                        graphics.DrawRectangle(pen, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - 0, HEXSPACING_HEIGHT * 2);
-                        graphics.DrawRectangle(pen, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
+                        //No they don't. We need to draw a line to separate them
+                        int yPos = paintInfo.YStart + HEXSPACING_HEIGHT;
+                        graphics.DrawLine(pen, RECTDRAW_HEXSTART, yPos, RECTDRAW_HEXEND, yPos);
+                        graphics.DrawLine(pen, RECTDRAW_TEXTSTART, yPos, RECTDRAW_TEXTEND, yPos);
                     }
-                    else if (paintInfo.LastRowColumn > paintInfo.FirstRowColumn) //Do they meet each other? ie: Do they merge?
-                    {
-                        //Yes they do!
-                        DrawFirstRow(pen, paintInfo, graphics);
-                        DrawLastRow(pen, paintInfo, graphics);
-                    }
-                    else
-                    {
-                        //No they don't
-                        graphics.DrawRectangle(pen, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - 0, HEXSPACING_HEIGHT * 2);
-                        graphics.DrawRectangle(pen, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - 0, HEXSPACING_HEIGHT * 2);
-
-                        graphics.DrawRectangle(pen, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
-                        graphics.DrawRectangle(pen, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * 2);
-                    }
+                    DrawLastRow(pen, paintInfo, graphics);
                 break;
             }
         }
@@ -1101,13 +1568,13 @@ namespace ScriptableHexEditor
                 if (paintInfo.LastRowColumn != 0)
                 {
                     graphics.DrawLine(pen, GetCaretHexXPos(paintInfo.LastRowColumn) - 1, endYPos, CaretHexXPos16 - RECTDRAW_OFFSET, endYPos); //Bottom line
-                    graphics.DrawLine(pen, GetCaretTextXPos(paintInfo.LastRowColumn), endYPos, CaretTextXPos16, endYPos); //Bottom line
+                    graphics.DrawLine(pen, GetCaretTextXPos(paintInfo.LastRowColumn), endYPos, RECTDRAW_TEXTEND, endYPos); //Bottom line
                 }
                 graphics.DrawLine(pen, RECTDRAW_HEXSTART, yStart, RECTDRAW_HEXSTART, endYPos); //Left line
                 graphics.DrawLine(pen, RECTDRAW_HEXEND, yStart, RECTDRAW_HEXEND, endYPos); //Right line
 
                 graphics.DrawLine(pen, RECTDRAW_TEXTSTART, yStart, RECTDRAW_TEXTSTART, endYPos); //Left line
-                graphics.DrawLine(pen, CaretTextXPos16, yStart, CaretTextXPos16, endYPos); //Right line
+                graphics.DrawLine(pen, RECTDRAW_TEXTEND, yStart, RECTDRAW_TEXTEND, endYPos); //Right line
             }
         }
         private void DrawLastRow(Pen pen, RegionPaintInfo paintInfo, Graphics graphics)

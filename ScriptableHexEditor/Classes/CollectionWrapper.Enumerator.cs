@@ -34,10 +34,7 @@ namespace ScriptableHexEditor
             {
                 iCollectionEnumerator.Reset();
             }
-            public void Dispose()
-            {
-                throw new NotSupportedException();
-            }
+            public void Dispose() { }
         }
     }
 }

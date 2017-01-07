@@ -1,20 +1,19 @@
 ﻿using System;
 using System.IO;
-using System.Text;
 using LuaInterface;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Collections.Generic;
 namespace ScriptableHexEditor
 {
-    public class HexEditorScript : IFieldContainer
+    public class HexEditorScript : IFieldsContainer
     {
         static readonly string[] LUA_METHODS = new string[] {
             "print", "registerEnum", "enumKey",
             "startList", "endList", "startStruct", "startStructEx", "endStruct",
             "byteField", "sbyteField", "shortField", "ushortField",
             "intField", "uintField", "longField", "ulongField",
-            "floatField", "doubleField", "cstringField", "utfField",
+            "halfField", "floatField", "doubleField", "cstringField", "utfField",
             "boolField", "enumField",
         };
         Lua luaConsole;
@@ -44,6 +43,22 @@ namespace ScriptableHexEditor
                 return enumerations.Keys;
             }
         }
+        public FieldContainerInfo FirstContainer
+        {
+            get
+            {
+                FieldInfo currField;
+                for (int currFieldIndex = 0; currFieldIndex < rootFields.Count; currFieldIndex++)
+                {
+                    currField = rootFields[currFieldIndex];
+                    if (currField.GetType() == typeof(FieldContainerInfo))
+                    {
+                        return (FieldContainerInfo)currField;
+                    }
+                }
+                return null; //Unlikely unless the script made none...
+            }
+        }
         public int FieldsCount
         {
             get
@@ -51,9 +66,27 @@ namespace ScriptableHexEditor
                 return rootFields.Count;
             }
         }
+        private IFieldsContainer CurrFieldParent
+        {
+            get
+            {
+                return currFieldContainers.Count != 0 ? (IFieldsContainer)currFieldContainers.Peek() : this;
+            }
+        }
         public FieldInfo GetField(int index)
         {
             return rootFields[index];
+        }
+        public int IndexOf(FieldInfo field)
+        {
+            for (int currFieldIndex = 0; currFieldIndex < rootFields.Count; currFieldIndex++)
+            {
+                if (rootFields[currFieldIndex] == field)
+                {
+                    return currFieldIndex;
+                }
+            }
+            return -1;
         }
         public void Run()
         {
@@ -61,9 +94,55 @@ namespace ScriptableHexEditor
             dataReader.BaseStream.Position = 0;
             luaConsole.DoFile(scriptPath);
         }
+        public FieldInfo FindFieldAt(int fileOffset)
+        {
+            return FindFieldAt(this, fileOffset);
+        }
+        private FieldInfo FindFieldAt(IFieldsContainer fieldsContainer, int fileOffset)
+        {
+            FieldInfo currField;
+            FieldInfo foundField;
+            for (int currFieldIndex = 0; currFieldIndex < fieldsContainer.FieldsCount; currFieldIndex++)
+            {
+                currField = fieldsContainer.GetField(currFieldIndex);
+                if ((currField.FileOffset + currField.Length) > fileOffset)
+                {
+                    if (currField.GetType() == typeof(FieldContainerInfo))
+                    {
+                        foundField = FindFieldAt((FieldContainerInfo)currField, fileOffset);
+                        if (foundField != null) //Did our child have it?
+                        {
+                            return foundField;
+                        }
+                        //No, continue looking...
+                    }
+                    else
+                    {
+                        return currField;
+                    }
+                }
+            }
+            return null; //Welp, we didn't have it...
+        }
+        public FieldContainerInfo FindContainerAt(int fileOffset)
+        {
+            IFieldsContainer parentContainer = FindFieldAt(this, fileOffset).ParentContainer;
+            return parentContainer.GetType() == typeof(FieldContainerInfo) ? (FieldContainerInfo)parentContainer : null;
+        }
         public ICollection<string> GetEnumKeys(string enumName)
         {
             return new CollectionWrapper<string>(enumerations[enumName].Keys);
+        }
+        public string GetEnumKey(string enumName, int value)
+        {
+            foreach (string currEnumKey in enumerations[enumName].Keys)
+            {
+                if (GetEnumValue(enumName, currEnumKey) == value)
+                {
+                    return currEnumKey;
+                }
+            }
+            return value.ToString();
         }
         public int GetEnumValue(string enumName, string enumKey)
         {
@@ -167,11 +246,11 @@ namespace ScriptableHexEditor
         }
         private void StartStructEx(bool isBackground, uint hexColor)
         {
-            AddNewContainer( new FieldContainerInfo((int)dataReader.BaseStream.Position, isBackground, HexToColor(hexColor)) );
+            AddNewContainer( new FieldContainerInfo(this.CurrFieldParent, (int)dataReader.BaseStream.Position, isBackground, HexToColor(hexColor)) );
         }
         private void StartStructEx(uint bgHexColor, uint rectHexColor)
         {
-            AddNewContainer( new FieldContainerInfo((int)dataReader.BaseStream.Position, HexToColor(bgHexColor), HexToColor(rectHexColor)) );
+            AddNewContainer( new FieldContainerInfo(this.CurrFieldParent, (int)dataReader.BaseStream.Position, HexToColor(bgHexColor), HexToColor(rectHexColor)) );
         }
         private Color HexToColor(uint hexColor)
         {
@@ -221,6 +300,11 @@ namespace ScriptableHexEditor
             AddNewField(fieldName, 8, FieldType.ULong);
             return dataReader.ReadUInt64();
         }
+        public float halfField(string fieldName)
+        {
+            AddNewField(fieldName, 2, FieldType.HalfFloat);
+            return HalfHelper.HalfToSingle(Half.ToHalf(dataReader.ReadBytes(2), 0));
+        }
         public float floatField(string fieldName)
         {
             AddNewField(fieldName, 4, FieldType.Float);
@@ -233,23 +317,16 @@ namespace ScriptableHexEditor
         }
         public string cstringField(string fieldName)
         {
-            int fieldLength;
-            StringBuilder cString = new StringBuilder();
-            char readChar = dataReader.ReadChar();
-            while (readChar != '\0')
-            {
-                cString.Append(readChar);
-                readChar = dataReader.ReadChar();
-            }
-            fieldLength = cString.Length + 1;
-            AddNewField(new FieldInfo(fieldName, (int)dataReader.BaseStream.Position - fieldLength, fieldLength, FieldType.CString));
-            return cString.ToString();
+            string cString = Utils.ReadCString(dataReader);
+            int fieldLength = cString.Length + 1;
+            AddNewField(new FieldInfo(this.CurrFieldParent, fieldName, (int)dataReader.BaseStream.Position - fieldLength, fieldLength, FieldType.CString));
+            return cString;
         }
         public string utfField(string fieldName)
         {
             int fieldOffset = (int)dataReader.BaseStream.Position;
             string readString = dataReader.ReadString();
-            AddNewField(new FieldInfo(fieldName, fieldOffset, readString.Length + 1, FieldType.UTFString));
+            AddNewField(new FieldInfo(this.CurrFieldParent, fieldName, fieldOffset, readString.Length + 1, FieldType.UTFString));
             return readString;
         }
         public bool boolField(string fieldName)
@@ -259,12 +336,12 @@ namespace ScriptableHexEditor
         }
         public int enumField(string fieldName, string enumName)
         {
-            AddNewField(fieldName, 4, FieldType.Enum);
+            AddNewField(new EnumFieldInfo(this.CurrFieldParent, fieldName, (int)dataReader.BaseStream.Position, enumName));
             return dataReader.ReadInt32();
         }
         private void AddNewField(string fieldName, int length, FieldType fieldType)
         {
-            AddNewField(new FieldInfo(fieldName, (int)dataReader.BaseStream.Position, length, fieldType));
+            AddNewField(new FieldInfo(this.CurrFieldParent, fieldName, (int)dataReader.BaseStream.Position, length, fieldType));
         }
         public void AddNewField(FieldInfo field)
         {
@@ -279,7 +356,7 @@ namespace ScriptableHexEditor
         }
         private void AddNewContainer(bool isStruct)
         {
-            AddNewContainer(new FieldContainerInfo((int)dataReader.BaseStream.Position, isStruct));
+            AddNewContainer(new FieldContainerInfo(this.CurrFieldParent, (int)dataReader.BaseStream.Position, isStruct));
         }
         private void AddNewContainer(FieldContainerInfo container)
         {

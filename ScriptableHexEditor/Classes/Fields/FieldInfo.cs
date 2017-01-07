@@ -3,22 +3,23 @@ namespace ScriptableHexEditor
 {
     public enum FieldType
     {
-        List = 0,
-        Struct = 1,
-        Byte = 2,
-        SByte = 3,
-        Short = 4,
-        UShort = 5,
+        Byte = 0,
+        SByte = 1,
+        Bool = 2,
+        Short = 3,
+        UShort = 4,
+        HalfFloat = 5,
         Int = 6,
         UInt = 7,
-        Long = 8,
-        ULong = 9,
-        Float = 10,
+        Float = 8,
+        Long = 9,
+        ULong = 10,
         Double = 11,
-        CString = 12,
-        UTFString = 13,
-        Bool = 14,
-        Enum = 15
+        Enum = 12,
+        CString = 13,
+        UTFString = 14,
+        Struct = 15,
+        List = 16,
     }
     public class FieldInfo
     {
@@ -26,13 +27,15 @@ namespace ScriptableHexEditor
         string name;
         int fileOffset;
         FieldType fieldType;
-        public FieldInfo(int fileOffset, int length, FieldType fieldType)
+        IFieldsContainer parentContainer;
+        public FieldInfo(IFieldsContainer parentContainer, int fileOffset, int length, FieldType fieldType)
         {
             this.length = length;
             this.fieldType = fieldType;
             this.fileOffset = fileOffset;
+            this.parentContainer = parentContainer;
         }
-        public FieldInfo(string name, int fileOffset, int length, FieldType fieldType) : this(fileOffset, length, fieldType)
+        public FieldInfo(IFieldsContainer parentContainer, string name, int fileOffset, int length, FieldType fieldType) : this(parentContainer, fileOffset, length, fieldType)
         {
             this.name = name;
         }
@@ -41,13 +44,6 @@ namespace ScriptableHexEditor
             get
             {
                 return fileOffset;
-            }
-        }
-        public FieldType Type
-        {
-            get
-            {
-                return fieldType;
             }
         }
         public string Name
@@ -61,11 +57,25 @@ namespace ScriptableHexEditor
                 name = value;
             }
         }
+        public FieldType Type
+        {
+            get
+            {
+                return fieldType;
+            }
+        }
         public virtual int Length
         {
             get
             {
                 return length;
+            }
+        }
+        public IFieldsContainer ParentContainer
+        {
+            get
+            {
+                return parentContainer;
             }
         }
     }
