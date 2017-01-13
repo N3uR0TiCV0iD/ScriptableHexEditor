@@ -29,6 +29,7 @@ namespace ScriptableHexEditor
             this.hexEditor1.DebugString += HexEditor1_DebugString; //TMP
             this.hexEditor1.GotFocus += HexEditor_GotFocus;
             this.fieldsView.MouseWheel += FieldsView_MouseWheel;
+            this.hexEditor1.DataChanged += HexEditor_DataChanged;
             for (int currItemIndex = 0; currItemIndex < dataInspectorBox.Items.Count; currItemIndex++)
             {
                 dataInspectorBox.SetItemState(currItemIndex, false);
@@ -270,33 +271,52 @@ namespace ScriptableHexEditor
             if (field != null) //Do we have a valid field?
             {
                 //Yes, let's find and select the corresponding tree node
-                Stack<int> nodeIndices = new Stack<int>();
-                IFieldsContainer currFieldContainer;
-                FieldInfo currField = field;
-                TreeNode currTreeNode;
-                while (currField != null)
+                skipNodeSelection = true;
+                fieldsView.SelectedNode = FindTreeNode(field);
+                fieldsView.EnsureVisible(fieldsView.SelectedNode, true);
+                skipNodeSelection = false;
+            }
+        }
+        private FastTreeNode FindTreeNode(FieldInfo field)
+        {
+            Stack<int> nodeIndices = new Stack<int>();
+            IFieldsContainer currFieldContainer;
+            FieldInfo currField = field;
+            FastTreeNode currTreeNode;
+            while (currField != null)
+            {
+                currFieldContainer = currField.ParentContainer;
+                nodeIndices.Push(currFieldContainer.IndexOf(currField));
+                if (currFieldContainer.GetType() == typeof(FieldContainerInfo))
                 {
-                    currFieldContainer = currField.ParentContainer;
-                    nodeIndices.Push(currFieldContainer.IndexOf(currField));
-                    if (currFieldContainer.GetType() == typeof(FieldContainerInfo))
-                    {
-                        currField = (FieldContainerInfo)currFieldContainer;
-                    }
-                    else
-                    {
-                        currField = null;
-                    }
+                    currField = (FieldContainerInfo)currFieldContainer;
                 }
-                if (nodeIndices.Count != 0)
+                else
                 {
-                    skipNodeSelection = true;
-                    currTreeNode = fieldsView.Nodes[nodeIndices.Pop()];
-                    while (nodeIndices.Count != 0)
-                    {
-                        currTreeNode = currTreeNode.Nodes[nodeIndices.Pop()];
-                    }
-                    fieldsView.SelectedNode = currTreeNode;
-                    skipNodeSelection = false;
+                    currField = null;
+                }
+            }
+            if (nodeIndices.Count != 0)
+            {
+                currTreeNode = fieldsView.Nodes[nodeIndices.Pop()];
+                while (nodeIndices.Count != 0)
+                {
+                    currTreeNode = currTreeNode.Nodes[nodeIndices.Pop()];
+                }
+                return currTreeNode;
+            }
+            return null;
+        }
+        private void HexEditor_DataChanged(object sender, int fileOffset, int length)
+        {
+            HexEditor hexEditor = (HexEditor)sender;
+            FieldInfo field = hexEditor.FindFieldAt(fileOffset);
+            if (field != null)
+            {
+                FastTreeNode treeNode = FindTreeNode(field);
+                if (treeNode != null)
+                {
+                    treeNode.Text = field.Name + " = " + ReadFieldData(hexEditor, field);
                 }
             }
         }
@@ -305,68 +325,103 @@ namespace ScriptableHexEditor
             ToolStripMenuItem scriptFileMenuItem = (ToolStripMenuItem)sender;
             hexEditor1.RunScript("Scripts\\" + scriptFileMenuItem.Text);
         }
-        private void HexEditor_ScriptDone(IFieldsContainer rootFields)
+        private void HexEditor_ScriptDone(object sender, IFieldsContainer rootFields)
         {
-            object sender = hexEditor1; //TODO: Update the method, event and delegate
             HexEditor hexEditor = (HexEditor)sender;
             this.rootFields = rootFields;
             UpdateListBox(hexEditor);
             fieldsView.Nodes.Clear();
             skipNodeFind = true;
-            hexEditor.SelectionStart = 0;
+            hexEditor.StartReading(0);
             AddFieldsToNode(fieldsView.Nodes, hexEditor, rootFields);
-            foreach (TreeNode currRootNode in fieldsView.Nodes)
+            foreach (FastTreeNode currRootNode in fieldsView.Nodes)
             {
                 currRootNode.Expand();
             }
             FocusField(hexEditor.SelectedField);
+            hexEditor.DoneReading();
             skipNodeFind = false;
         }
-        private void AddFieldsToNode(TreeNodeCollection targetNodes, HexEditor hexEditor, IFieldsContainer fieldsContainer)
+        private void AddFieldsToNode(FastNodesCollection targetNodes, HexEditor hexEditor, IFieldsContainer fieldsContainer)
         {
-            object fieldData;
             FieldInfo currField;
-            TreeNode currFieldNode;
-            EnumFieldInfo enumField;
+            FastTreeNode currFieldNode;
             for (int currFieldIndex = 0; currFieldIndex < fieldsContainer.FieldsCount; currFieldIndex++)
             {
                 currField = fieldsContainer.GetField(currFieldIndex);
                 if (currField.GetType() == typeof(FieldContainerInfo))
                 {
                     currFieldNode = targetNodes.Add(currField.Name);
+                    currFieldNode.ImageKey = GetFieldImageKey(currField.Type);
                     AddFieldsToNode(currFieldNode.Nodes, hexEditor, (FieldContainerInfo)currField);
                 }
                 else
                 {
-                    switch (currField.Type)
-                    {
-                        default:
-                            hexEditor.ReadData(currField.Type, false, out fieldData);
-                        break;
-                        case FieldType.Enum:
-                            enumField = (EnumFieldInfo)currField;
-                            if (hexEditor.ReadEnum(enumField.EnumName, false, out fieldData))
-                            {
-                                fieldData = enumField.EnumName + "." + fieldData;
-                            }
-                        break;
-                        case FieldType.CString:
-                            hexEditor.ReadCString(false, out fieldData);
-                            fieldData = "\"" + fieldData + "\"";
-                        break;
-                        case FieldType.UTFString:
-                            hexEditor.ReadUTFString(false, out fieldData);
-                            fieldData = "\"" + fieldData + "\"";
-                        break;
-                    }
-                    targetNodes.Add(currField.Name + " = " + fieldData);
+                    targetNodes.Add(currField.Name + " = " + ReadFieldData(hexEditor, currField)).ImageKey = GetFieldImageKey(currField.Type);
                 }
             }
         }
-        private void fieldsView_AfterSelect(object sender, TreeViewEventArgs e)
+        private object ReadFieldData(HexEditor hexEditor, FieldInfo field)
+        {
+            object fieldData;
+            switch (field.Type)
+            {
+                default:
+                    hexEditor.ReadData(field.Type, false, out fieldData);
+                break;
+                case FieldType.Enum:
+                    EnumFieldInfo enumField = (EnumFieldInfo)field;
+                    if (hexEditor.ReadEnum(enumField.EnumName, false, out fieldData))
+                    {
+                        fieldData = enumField.EnumName + "." + fieldData;
+                    }
+                break;
+                case FieldType.CString:
+                    hexEditor.ReadCString(false, out fieldData);
+                    fieldData = "\"" + fieldData + "\"";
+                break;
+                case FieldType.UTFString:
+                    hexEditor.ReadUTFString(false, out fieldData);
+                    fieldData = "\"" + fieldData + "\"";
+                break;
+            }
+            return fieldData;
+        }
+        private string GetFieldImageKey(FieldType fieldType)
+        {
+            switch (fieldType)
+            {
+                case FieldType.Byte:
+                case FieldType.SByte:
+                case FieldType.Short:
+                case FieldType.UShort:
+                case FieldType.HalfFloat:
+                case FieldType.Int:
+                case FieldType.UInt:
+                case FieldType.Float:
+                case FieldType.Long:
+                case FieldType.ULong:
+                case FieldType.Double: return "Number";
+
+                case FieldType.Bool: return "Boolean";
+
+                case FieldType.Enum: return "Enum";
+
+                case FieldType.CString:
+                case FieldType.UTFString: return "String";
+
+                case FieldType.Struct: return "Struct";
+
+                case FieldType.List: return "List";
+
+                default: throw new Exception();
+            }
+        }
+        private void FieldsView_AfterSelect(object sender, FastTreeViewEventArgs e)
         {
             if (!skipNodeSelection)
             {
+                this.Text = e.Node.Text;
                 FieldInfo selectedFieldInfo = GetFieldFromNode(e.Node);
                 skipNodeFind = true;
                 hexEditor1.SelectionStart = selectedFieldInfo.FileOffset;
@@ -374,11 +429,11 @@ namespace ScriptableHexEditor
                 skipNodeFind = false;
             }
         }
-        private FieldInfo GetFieldFromNode(TreeNode node)
+        private FieldInfo GetFieldFromNode(FastTreeNode node)
         {
             IFieldsContainer currFieldContainer = rootFields;
             Stack<int> fieldIndices = new Stack<int>();
-            TreeNode currNode = node;
+            FastTreeNode currNode = node;
             while (currNode != null)
             {
                 fieldIndices.Push(currNode.Index);
@@ -389,28 +444,6 @@ namespace ScriptableHexEditor
                 currFieldContainer = (IFieldsContainer)currFieldContainer.GetField(fieldIndices.Pop());
             }
             return currFieldContainer.GetField(fieldIndices.Pop());
-        }
-        private void FieldsView_MouseDown(object sender, MouseEventArgs e)
-        {
-            TreeNode node = fieldsView.GetNodeAt(e.X, e.Y);
-            if (node != null && node.Bounds.Contains(e.X, e.Y))
-            {
-                fieldsView.SelectedNode = node;
-            }
-        }
-        private void FieldsView_DrawNode(object sender, DrawTreeNodeEventArgs e)
-        {
-            if (!e.Node.TreeView.Focused && e.Node == e.Node.TreeView.SelectedNode)
-            {
-                Font treeFont = e.Node.NodeFont ?? e.Node.TreeView.Font;
-                e.Graphics.FillRectangle(SystemBrushes.Highlight, e.Bounds);
-                ControlPaint.DrawFocusRectangle(e.Graphics, e.Bounds, SystemColors.HighlightText, SystemColors.Highlight);
-                TextRenderer.DrawText(e.Graphics, e.Node.Text, treeFont, e.Bounds, SystemColors.HighlightText, TextFormatFlags.GlyphOverhangPadding);
-            }
-            else
-            {
-                e.DrawDefault = true;
-            }
         }
         private void FieldsView_MouseWheel(object sender, MouseEventArgs e)
         {

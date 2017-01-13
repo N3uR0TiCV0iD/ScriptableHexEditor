@@ -11,7 +11,8 @@ namespace ScriptableHexEditor
 {
     //Lots and lots of magic numbers here... Be prepared :^)
     public delegate void DebugStringHandler(string message);
-    public delegate void ScriptDoneHandler(IFieldsContainer rootFields);
+    public delegate void ScriptDoneHandler(object sender, IFieldsContainer rootFields);
+    public delegate void DataChangedHandler(object sender, int fileOffset, int length);
     public partial class HexEditor : Control
     {
         //TMP
@@ -58,6 +59,7 @@ namespace ScriptableHexEditor
         int firstNibble;
         bool selecting;
         bool inHexArea;
+        bool isReading;
         public HexEditor()
         {
             int readBytes;
@@ -75,6 +77,7 @@ namespace ScriptableHexEditor
             this.Font = new Font("Courier New", 12F, FontStyle.Regular, GraphicsUnit.Point, 0);
             this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.DoubleBuffer, true);
             //TMP
+            //filePath = "C:\\Users\\Patrick\\AppData\\LocalLow\\DefaultCompany\\All-Mozart\\Sheets\\FRENCH SONG.msf";
             filePath = "C:\\Users\\Patrick\\AppData\\LocalLow\\DefaultCompany\\All-Mozart\\Sheets\\Contest_Entry.msf";
             try
             {
@@ -181,23 +184,24 @@ namespace ScriptableHexEditor
                 {
                     parentContainer = selectedContainer.ParentContainer;
                     int fieldIndex = parentContainer.IndexOf(selectedContainer);
-                    if (fieldIndex != 0) //Are we the first field in the parent 
+                    if (fieldIndex != 0) //Is the selected container the first field of its parent?
                     {
                         return parentContainer.GetField(fieldIndex - 1).FileOffset - selectionEnd;
                     }
                     else if (parentContainer.GetType() == typeof(FieldContainerInfo))
                     {
-                        FieldInfo currField;
-                        selectedContainer = (FieldContainerInfo)parentContainer; //Reutilzing variable
+                        FieldInfo currField = null;
+                        var parent = (FieldContainerInfo)parentContainer;
+                        selectedContainer = (FieldContainerInfo)parentContainer; //Reutilzing variable. It is technically currContainer
                         while (fieldIndex == 0)
                         {
+                            //Keep going up
                             parentContainer = selectedContainer.ParentContainer;
                             fieldIndex = parentContainer.IndexOf(selectedContainer);
-                            //Keep going up
                         }
-                        parentContainer = selectedContainer.ParentContainer;
                         for (int currFieldIndex = fieldIndex - 1; currFieldIndex >= 0; currFieldIndex--)
                         {
+                            //Let's look at the siblings (going up) until one of them is a field container
                             currField = parentContainer.GetField(currFieldIndex);
                             if (currField.GetType() == typeof(FieldContainerInfo))
                             {
@@ -205,6 +209,8 @@ namespace ScriptableHexEditor
                                 return parentContainer.GetField(parentContainer.FieldsCount - 1).FileOffset - selectionEnd;
                             }
                         }
+                        //Welp, we didn't find any field container siblings. Let's go to the top sibling instead
+                        return currField.FileOffset - selectionEnd;
                     }
                 }
                 return -selectionEnd;
@@ -276,11 +282,11 @@ namespace ScriptableHexEditor
                 }
                 catch (LuaException ex)
                 {
-                    retry = MessageBox.Show("LuaError: " + ex.Message, "ERROR: LuaError", MessageBoxButtons.RetryCancel, MessageBoxIcon.Warning) == DialogResult.Retry;
+                    retry = MessageBox.Show(ex.Message, "ERROR: LuaError", MessageBoxButtons.RetryCancel, MessageBoxIcon.Warning) == DialogResult.Retry;
                 }
                 catch (EndOfStreamException ex)
                 {
-                    MessageBox.Show("Warning: Something went wrong, are you sure this this is the correct file format?", "Warning: Bad format?", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("WARNING: Something went wrong, are you sure this this is the correct file format?", "WARNING: Bad format?", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     retry = false;
                 }
                 catch (Exception ex)
@@ -291,9 +297,99 @@ namespace ScriptableHexEditor
             }
             if (success)
             {
-                ScriptDone?.Invoke(usingScript);
+                ScriptDone?.Invoke(this, usingScript);
                 this.Refresh();
             }
+        }
+        public void Cut()
+        {
+            Cut(inHexArea);
+        }
+        public void Cut(bool isHexString)
+        {
+            Cut(this.SelectionStart, this.SelectionLength, isHexString);
+        }
+        public void Cut(int fileOffset, int length, bool isHexString)
+        {
+            Copy(fileOffset, length, isHexString);
+            Delete(fileOffset, length);
+        }
+        public void Copy()
+        {
+            Copy(inHexArea);
+        }
+        public void Copy(bool isHexString)
+        {
+            Copy(this.SelectionStart, this.SelectionLength, isHexString);
+        }
+        public void Copy(int fileOffset, int length, bool isHexString)
+        {
+            StringBuilder clipboardText = new StringBuilder();
+            byte[] bytes = GetBytes(fileOffset, length);
+            if (isHexString)
+            {
+                foreach (var currByte in bytes)
+                {
+                    clipboardText.Append(currByte.ToString("X"));
+                }
+            }
+            else
+            {
+                foreach (var currByte in bytes)
+                {
+                    if (!Utils.IsPrintableASCIIChar(currByte))
+                    {
+                        clipboardText.Append(".");
+                    }
+                    else
+                    {
+                        clipboardText.Append((char)currByte);
+                    }
+                }
+            }
+            Clipboard.SetText(clipboardText.ToString());
+        }
+        public void Paste()
+        {
+            Paste(inHexArea);
+        }
+        public void Paste(bool isHexString)
+        {
+            Paste(this.SelectionStart, isHexString);
+        }
+        public void Paste(int fileOffset, bool isHexString)
+        {
+            byte[] bytes;
+            if (isHexString)
+            {
+                bytes = Utils.HexStringToBytes(Clipboard.GetText());
+            }
+            else
+            {
+                bytes = Encoding.ASCII.GetBytes(Clipboard.GetText());
+            }
+            Insert(fileOffset, bytes);
+        }
+        public void Insert(byte[] bytes)
+        {
+            Insert(this.SelectionStart, bytes);
+        }
+        public void Insert(int fileOffset, byte[] bytes)
+        {
+
+        }
+        public void Delete()
+        {
+            Delete(this.SelectionStart, this.SelectionLength);
+        }
+        public void Delete(int fileOffset, int length)
+        {
+
+        }
+        public byte[] GetBytes(int fileOffset, int length)
+        {
+            dataStream.Position = fileOffset;
+            return dataReader.ReadBytes(length);
         }
         public FieldInfo FindFieldAt(int fileOffset)
         {
@@ -303,8 +399,21 @@ namespace ScriptableHexEditor
         {
             return usingScript != null ? usingScript.FindContainerAt(fileOffset) : null;
         }
-        public void FindHexBytes(string hexString)
+        public void ReplaceHexString(string hexString, string newHexString)
         {
+
+        }
+        public void FindHexString(string hexString)
+        {
+
+        }
+        public void ReplaceString(string seachString, string newString)
+        {
+
+        }
+        public void FindString(string searchString)
+        {
+
         }
         public string GetEnumKey(EnumFieldInfo enumField, int value)
         {
@@ -318,6 +427,17 @@ namespace ScriptableHexEditor
         {
             dataStream.Position = field.FileOffset;
             return dataReader.ReadBytes(field.Length);
+        }
+        public void StartReading(int fileOffset)
+        {
+            dataStream.Position = fileOffset;
+            updateStreamPosition = false;
+            isReading = true;
+        }
+        public void DoneReading()
+        {
+            updateStreamPosition = true;
+            isReading = false;
         }
         public byte[] BulkRead()
         {
@@ -642,8 +762,9 @@ namespace ScriptableHexEditor
         {
             if (updateStreamPosition)
             {
+                //MessageBox.Show("Updating stream position...");
                 dataStream.Position = this.SelectionStart;
-                updateStreamPosition = false;
+                updateStreamPosition = !isReading;
             }
         }
         private void ScrollBar_ValueChanged(object sender, EventArgs e)
@@ -1201,29 +1322,38 @@ namespace ScriptableHexEditor
         }
         private void UpdateFirstNibble(int nibbleValue)
         {
+            int selectionStart = this.SelectionStart;
             int newByteValue;
             firstNibble = nibbleValue << 4;
+            StreamPositionUpdateCheck();
             if (selectionStart != dataStream.Length)
             {
-                dataStream.Position = selectionStart;
                 newByteValue = firstNibble | (dataStream.ReadByte() & 0x0F);
+                dataStream.Position = selectionStart;
             }
             else
             {
+                MessageBox.Show("Test2");
                 newByteValue = firstNibble;
             }
-            dataStream.Position = selectionStart;
             SetCaretPos(GetCaretHexXPos(selectionStart % 16) + CHARWIDTH, GetCaretYPos(selectionStart / 16)); //Moves caret to the next nibble
             dataStream.WriteByte((byte)newByteValue);
+            OnDataChanged(selectionStart, 1);
             wroteNibble = true;
             this.Refresh();
         }
         private void UpdateLastNibble(int nibbleValue)
         {
+            int selectionStart = this.SelectionStart;
             dataStream.Position = selectionStart;
             dataStream.WriteByte((byte)(firstNibble | nibbleValue));
-            selectionStart++;
+            OnDataChanged(selectionStart, 1);
+            this.selectionStart = (int)dataStream.Position;
             OnSelectionChanged(false);
+        }
+        protected virtual void OnDataChanged(int fileOffset, int length)
+        {
+            DataChanged?.Invoke(this, fileOffset, length);
         }
         protected override void OnKeyPress(KeyPressEventArgs e)
         {
@@ -1345,7 +1475,7 @@ namespace ScriptableHexEditor
                     readByte = dataReader.ReadByte();
                     if (readByte >= 16)
                     {
-                        if (readByte < 32 || readByte > 126)
+                        if (!Utils.IsPrintableASCIIChar(readByte))
                         {
                             asciiString.Append(".");
                         }
@@ -1640,6 +1770,7 @@ namespace ScriptableHexEditor
             dataStream.Dispose();
             dataReader.Close();
         }
+        public event DataChangedHandler DataChanged;
         public event EventHandler SelectionChanged;
         public event ScriptDoneHandler ScriptDone;
     }

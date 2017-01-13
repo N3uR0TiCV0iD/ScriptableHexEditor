@@ -48,7 +48,15 @@
     <Compile Include="Classes\CollectionWrapper.Enumerator.cs" />
     <Compile Include="Classes\Fields\EnumFieldInfo.cs" />
     <Compile Include="Classes\RegionPaintInfo.cs" />
+    <Compile Include="Classes\TreeView\FastNodesCollection.cs" />
+    <Compile Include="Classes\TreeView\FastTreeNode.cs" />
+    <Compile Include="Classes\TreeView\FastTreeNodeMouseClickEventArg.cs" />
+    <Compile Include="Classes\TreeView\FastTreeViewEventArgs.cs" />
+    <Compile Include="Classes\TreeView\FastTreeViewHitTestInfo.cs" />
     <Compile Include="Controls\DisableListBox.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="Controls\FastTreeView.cs">
       <SubType>Component</SubType>
     </Compile>
     <Compile Include="Controls\HexEditor.cs">

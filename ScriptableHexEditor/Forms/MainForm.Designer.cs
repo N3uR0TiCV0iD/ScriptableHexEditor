@@ -28,8 +28,9 @@
         /// </summary>
         private void InitializeComponent()
         {
+            this.components = new System.ComponentModel.Container();
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(MainForm));
             this.backgroundDrawer = new System.Windows.Forms.Control();
-            this.fieldsView = new System.Windows.Forms.TreeView();
             this.mainMenu = new System.Windows.Forms.MenuStrip();
             this.fileMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.newFileMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -49,9 +50,13 @@
             this.helpMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.tabControl1 = new System.Windows.Forms.TabControl();
             this.tabPage1 = new System.Windows.Forms.TabPage();
+            this.fieldsViewImageList = new System.Windows.Forms.ImageList(this.components);
             this.tabPage2 = new System.Windows.Forms.TabPage();
             this.toolMenuStrip = new System.Windows.Forms.ToolStrip();
+            this.hexEditorContextMenu = new System.Windows.Forms.ContextMenuStrip(this.components);
+            this.toolTip = new System.Windows.Forms.ToolTip(this.components);
             this.dataInspectorBox = new ScriptableHexEditor.DisableListBox();
+            this.fieldsView = new ScriptableHexEditor.FastTreeView();
             this.hexEditor1 = new ScriptableHexEditor.HexEditor();
             this.mainMenu.SuspendLayout();
             this.tabControl1.SuspendLayout();
@@ -66,20 +71,6 @@
             this.backgroundDrawer.Name = "backgroundDrawer";
             this.backgroundDrawer.Size = new System.Drawing.Size(258, 2);
             this.backgroundDrawer.TabIndex = 4;
-            // 
-            // fieldsView
-            // 
-            this.fieldsView.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.fieldsView.DrawMode = System.Windows.Forms.TreeViewDrawMode.OwnerDrawText;
-            this.fieldsView.HideSelection = false;
-            this.fieldsView.Location = new System.Drawing.Point(3, 3);
-            this.fieldsView.Name = "fieldsView";
-            this.fieldsView.Size = new System.Drawing.Size(221, 463);
-            this.fieldsView.TabIndex = 2;
-            this.fieldsView.DrawNode += new System.Windows.Forms.DrawTreeNodeEventHandler(this.FieldsView_DrawNode);
-            this.fieldsView.AfterSelect += new System.Windows.Forms.TreeViewEventHandler(this.fieldsView_AfterSelect);
-            this.fieldsView.NodeMouseDoubleClick += new System.Windows.Forms.TreeNodeMouseClickEventHandler(this.FieldsView_NodeMouseDoubleClick);
-            this.fieldsView.MouseDown += new System.Windows.Forms.MouseEventHandler(this.FieldsView_MouseDown);
             // 
             // mainMenu
             // 
@@ -227,12 +218,23 @@
             this.tabPage1.Text = "tabPage1";
             this.tabPage1.UseVisualStyleBackColor = true;
             // 
+            // fieldsViewImageList
+            // 
+            this.fieldsViewImageList.ImageStream = ((System.Windows.Forms.ImageListStreamer)(resources.GetObject("fieldsViewImageList.ImageStream")));
+            this.fieldsViewImageList.TransparentColor = System.Drawing.Color.Transparent;
+            this.fieldsViewImageList.Images.SetKeyName(0, "Number");
+            this.fieldsViewImageList.Images.SetKeyName(1, "Boolean");
+            this.fieldsViewImageList.Images.SetKeyName(2, "Enum");
+            this.fieldsViewImageList.Images.SetKeyName(3, "String");
+            this.fieldsViewImageList.Images.SetKeyName(4, "Struct");
+            this.fieldsViewImageList.Images.SetKeyName(5, "List");
+            // 
             // tabPage2
             // 
             this.tabPage2.Location = new System.Drawing.Point(4, 22);
             this.tabPage2.Name = "tabPage2";
             this.tabPage2.Padding = new System.Windows.Forms.Padding(3);
-            this.tabPage2.Size = new System.Drawing.Size(1082, 469);
+            this.tabPage2.Size = new System.Drawing.Size(982, 469);
             this.tabPage2.TabIndex = 1;
             this.tabPage2.Text = "tabPage2";
             this.tabPage2.UseVisualStyleBackColor = true;
@@ -244,6 +246,11 @@
             this.toolMenuStrip.RenderMode = System.Windows.Forms.ToolStripRenderMode.System;
             this.toolMenuStrip.Size = new System.Drawing.Size(1184, 25);
             this.toolMenuStrip.TabIndex = 2;
+            // 
+            // hexEditorContextMenu
+            // 
+            this.hexEditorContextMenu.Name = "contextMenuStrip1";
+            this.hexEditorContextMenu.Size = new System.Drawing.Size(61, 4);
             // 
             // dataInspectorBox
             // 
@@ -269,6 +276,30 @@
             this.dataInspectorBox.Name = "dataInspectorBox";
             this.dataInspectorBox.Size = new System.Drawing.Size(195, 472);
             this.dataInspectorBox.TabIndex = 3;
+            // 
+            // fieldsView
+            // 
+            this.fieldsView.BackColor = System.Drawing.SystemColors.Window;
+            this.fieldsView.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.fieldsView.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.fieldsView.HideSelection = true;
+            this.fieldsView.ImageIndex = 0;
+            this.fieldsView.ImageKey = null;
+            this.fieldsView.ImageList = this.fieldsViewImageList;
+            this.fieldsView.Indent = 19;
+            this.fieldsView.ItemHeight = 16;
+            this.fieldsView.LabelEdit = false;
+            this.fieldsView.LineColor = System.Drawing.Color.FromArgb(((int)(((byte)(109)))), ((int)(((byte)(109)))), ((int)(((byte)(109)))));
+            this.fieldsView.Location = new System.Drawing.Point(3, 3);
+            this.fieldsView.Name = "fieldsView";
+            this.fieldsView.PathSeparator = "\\";
+            this.fieldsView.SelectedNode = null;
+            this.fieldsView.ShowLines = true;
+            this.fieldsView.ShowPlusMinus = true;
+            this.fieldsView.ShowRootLines = true;
+            this.fieldsView.Size = new System.Drawing.Size(221, 463);
+            this.fieldsView.TabIndex = 5;
+            this.fieldsView.AfterSelect += new ScriptableHexEditor.FastTreeView.NodeEventHandler(this.FieldsView_AfterSelect);
             // 
             // hexEditor1
             // 
@@ -308,8 +339,6 @@
         }
 
         #endregion
-
-        private System.Windows.Forms.TreeView fieldsView;
         private System.Windows.Forms.MenuStrip mainMenu;
         private System.Windows.Forms.ToolStripMenuItem fileMenuItem;
         private System.Windows.Forms.ToolStripMenuItem editMenuItem;
@@ -334,6 +363,10 @@
         private HexEditor hexEditor1;
         private System.Windows.Forms.ToolStripMenuItem viewMenuItem;
         private DisableListBox dataInspectorBox;
+        private FastTreeView fieldsView;
+        private System.Windows.Forms.ImageList fieldsViewImageList;
+        private System.Windows.Forms.ContextMenuStrip hexEditorContextMenu;
+        private System.Windows.Forms.ToolTip toolTip;
     }
 }
 
