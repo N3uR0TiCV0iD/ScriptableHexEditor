@@ -65,7 +65,7 @@
     <Compile Include="Controls\HexEditor.OnPaint.cs">
       <SubType>Component</SubType>
     </Compile>
-    <Compile Include="Classes\Streams\ExpandableStream.cs" />
+    <Compile Include="Classes\ExpandableStream.cs" />
     <Compile Include="Classes\Fields\FieldInfo.cs" />
     <Compile Include="Forms\MainForm.cs">
       <SubType>Form</SubType>
@@ -79,7 +79,6 @@
     <Compile Include="Primitives\HalfHelper.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Classes\Streams\StreamFragment.cs" />
     <Compile Include="Classes\Fields\FieldContainerInfo.cs" />
     <Compile Include="Classes\CollectionWrapper.cs" />
     <Compile Include="Utils.cs" />

@@ -316,7 +316,9 @@ namespace ScriptableHexEditor
                 FastTreeNode treeNode = FindTreeNode(field);
                 if (treeNode != null)
                 {
+                    hexEditor.StartReading(field.FileOffset);
                     treeNode.Text = field.Name + " = " + ReadFieldData(hexEditor, field);
+                    hexEditor.DoneReading();
                 }
             }
         }
@@ -461,7 +463,7 @@ namespace ScriptableHexEditor
                 ((HandledMouseEventArgs)e).Handled = true;
             }
         }
-        private void FieldsView_NodeMouseDoubleClick(object sender, TreeNodeMouseClickEventArgs e)
+        private void FieldsView_NodeMouseDoubleClick(object sender, FastTreeNodeMouseClickEventArg e)
         {
             //MessageBox.Show(GetFieldFromNode(e.Node).Type.ToString());
         }

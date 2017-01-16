@@ -42,10 +42,10 @@ namespace ScriptableHexEditor
         const int CaretHexXPos16 = 90 + (16 * HEXBYTES_WIDTH) - (16 / 6);
         static readonly int TRIPLECLICK_TIME = SystemInformation.DoubleClickTime / 2;
         Stopwatch doubleClickStopwatch;
+        ExpandableStream dataStream;
         HexEditorScript usingScript;
         bool updateStreamPosition;
         BinaryReader dataReader;
-        MemoryStream dataStream;
         VScrollBar scrollBar;
         Control virtualCaret;
         Color selectionColor;
@@ -68,8 +68,8 @@ namespace ScriptableHexEditor
             this.Controls.Add(this.scrollBar);
             this.virtualCaret = new Control();
             this.Controls.Add(this.virtualCaret);
-            this.dataStream = new MemoryStream();
             this.scrollBar.Dock = DockStyle.Right;
+            this.dataStream = new ExpandableStream();
             this.SelectionColor = SystemColors.Highlight;
             this.scrollBar.MouseEnter += ScrollBar_MouseEnter;
             this.doubleClickStopwatch = Stopwatch.StartNew();
@@ -79,8 +79,8 @@ namespace ScriptableHexEditor
             //TMP
             //filePath = "C:\\Users\\Patrick\\AppData\\LocalLow\\DefaultCompany\\All-Mozart\\Sheets\\FRENCH SONG.msf";
             filePath = "C:\\Users\\Patrick\\AppData\\LocalLow\\DefaultCompany\\All-Mozart\\Sheets\\Contest_Entry.msf";
-            try
-            {
+            //try
+            //{
                 using (FileStream editingFileStream = new FileStream(filePath, FileMode.Open))
                 {
                     readBytes = editingFileStream.Read(buffer, 0, 4096);
@@ -90,13 +90,13 @@ namespace ScriptableHexEditor
                         readBytes = editingFileStream.Read(buffer, 0, 4096);
                     }
                     this.dataReader = new BinaryReader(dataStream);
-                    //MessageBox.Show("Loaded " + editingFileStream.Length + " bytes");
-                }
+                    //MessageBox.Show("Loaded " + this.dataStream.Length + " bytes | Real: " + editingFileStream.Length);
             }
-            catch (Exception ex)
-            {
+            //}
+            //catch (Exception ex)
+            //{
 
-            }
+            //}
             //END TMP
             this.virtualCaret.BackColor = Color.Black;
             this.virtualCaret.Visible = false;
@@ -708,7 +708,7 @@ namespace ScriptableHexEditor
         public bool ReadCString(bool moveCaret, out object result)
         {
             StreamPositionUpdateCheck();
-            if (dataStream.Position != dataStream.Length)
+            if (!dataStream.EndOfStream)
             {
                 try
                 {
@@ -1322,33 +1322,33 @@ namespace ScriptableHexEditor
         }
         private void UpdateFirstNibble(int nibbleValue)
         {
-            int selectionStart = this.SelectionStart;
+            int writeStart = this.SelectionStart;
             int newByteValue;
             firstNibble = nibbleValue << 4;
             StreamPositionUpdateCheck();
-            if (selectionStart != dataStream.Length)
+            if (writeStart != dataStream.Length)
             {
                 newByteValue = firstNibble | (dataStream.ReadByte() & 0x0F);
-                dataStream.Position = selectionStart;
+                dataStream.Position = writeStart;
             }
             else
             {
                 MessageBox.Show("Test2");
                 newByteValue = firstNibble;
             }
-            SetCaretPos(GetCaretHexXPos(selectionStart % 16) + CHARWIDTH, GetCaretYPos(selectionStart / 16)); //Moves caret to the next nibble
+            SetCaretPos(GetCaretHexXPos(writeStart % 16) + CHARWIDTH, GetCaretYPos(writeStart / 16)); //Moves caret to the next nibble
             dataStream.WriteByte((byte)newByteValue);
-            OnDataChanged(selectionStart, 1);
+            OnDataChanged(writeStart, 1);
             wroteNibble = true;
             this.Refresh();
         }
         private void UpdateLastNibble(int nibbleValue)
         {
-            int selectionStart = this.SelectionStart;
-            dataStream.Position = selectionStart;
+            int writeStart = this.SelectionStart;
+            dataStream.Position = writeStart;
             dataStream.WriteByte((byte)(firstNibble | nibbleValue));
-            OnDataChanged(selectionStart, 1);
-            this.selectionStart = (int)dataStream.Position;
+            OnDataChanged(writeStart, 1);
+            this.selectionStart = writeStart + 1;
             OnSelectionChanged(false);
         }
         protected virtual void OnDataChanged(int fileOffset, int length)
@@ -1359,9 +1359,11 @@ namespace ScriptableHexEditor
         {
             if (!inHexArea)
             {
-                dataStream.Position = selectionStart;
+                int writeStart = this.SelectionStart;
+                dataStream.Position = writeStart;
                 dataStream.WriteByte((byte)e.KeyChar);
-                selectionStart++;
+                OnDataChanged(writeStart, 1);
+                this.selectionStart = writeStart + 1;
                 OnSelectionChanged(false);
             }
         }
@@ -1400,12 +1402,11 @@ namespace ScriptableHexEditor
             int caretRow = selectionStart / 16;
             RegionPaintInfo drawPaintInfo;
             RegionPaintInfo fillPaintInfo;
-            bool[] visibleRegions;
+            int remainingColumns;
+            int remainingBytes;
             string fileOffset;
             int yPos = 25;
             byte readByte;
-            int times;
-            int diff;
             e.Graphics.Clear(SystemColors.Control);
             e.Graphics.FillRectangle(Brushes.White, 85, 20, this.Width - 85, this.Height - 20);
             if (usingScript != null)
@@ -1419,11 +1420,6 @@ namespace ScriptableHexEditor
                         RememberFieldContainer((FieldContainerInfo)currField, paintingFieldContainers, e.Graphics);
                     }
                 }
-                visibleRegions = new bool[paintingFieldContainers.Count];
-            }
-            else
-            {
-                visibleRegions = null;
             }
             for (int currContainerIndex = 0; currContainerIndex < paintingFieldContainers.Count; currContainerIndex++) //Draws FieldContainers that have a background
             {
@@ -1434,7 +1430,6 @@ namespace ScriptableHexEditor
                     if (fillPaintInfo != null)
                     {
                         FillRectangleRegion(fillPaintInfo, currFieldContainer.BackgroundBrush, e.Graphics);
-                        visibleRegions[currContainerIndex] = true;
                     }
                 }
             }
@@ -1453,7 +1448,7 @@ namespace ScriptableHexEditor
                 if (currFieldContainer.RectanglePen != null)
                 {
                     drawPaintInfo = PreparePaintRegion(currFieldContainer.FileOffset, currFieldContainer.Length, true);
-                    if (visibleRegions[currContainerIndex] || drawPaintInfo != null)
+                    if (drawPaintInfo != null)
                     {
                         //TODO: Make use of the LEVEL argument
                         DrawRectangleRegion(drawPaintInfo, 0, currFieldContainer.RectanglePen, e.Graphics);
@@ -1465,12 +1460,12 @@ namespace ScriptableHexEditor
             e.Graphics.DrawLine(Pens.Black, 567, 0, 567, this.Height);
             e.Graphics.DrawString("0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF", this.Font, Brushes.Gray, 95, 0);
             dataStream.Position = scrollBar.Value * 16;
-            while (yPos < this.Height && dataStream.Position != dataStream.Length)
+            while (yPos < this.Height && !dataStream.EndOfStream)
             {
                 fileOffset = dataStream.Position.ToString("X");
-                diff = (int)(dataStream.Length - dataStream.Position);
-                times = diff >= 16 ? 16 : diff;
-                for (int currColumn = 0; currColumn < times; currColumn++)
+                remainingBytes = (int)(dataStream.Length - dataStream.Position);
+                remainingColumns = remainingBytes >= 16 ? 16 : remainingBytes;
+                for (int currColumn = 0; currColumn < remainingColumns; currColumn++)
                 {
                     readByte = dataReader.ReadByte();
                     if (readByte >= 16)
@@ -1612,16 +1607,6 @@ namespace ScriptableHexEditor
                     DrawFirstRow(pen, paintInfo, graphics);
                     DrawMiddleRows(pen, paintInfo, graphics);
                     DrawLastRow(pen, paintInfo, graphics);
-                    /*
-                    if (paintInfo.DrawEntireFirstRow && paintInfo.DrawEntireLastRow)
-                    {
-                        graphics.DrawRectangle(pen, CaretHexXPos0, paintInfo.YStart, (HEXBYTES_WIDTH * 16) - 0, HEXSPACING_HEIGHT * paintInfo.DrawingRows);
-                        graphics.DrawRectangle(pen, CaretTextXPos0, paintInfo.YStart, CHARWIDTH * 16, HEXSPACING_HEIGHT * paintInfo.DrawingRows);
-                    }
-                    else
-                    {
-                    }
-                    */
                 break;
                 case 1:
                     graphics.DrawRectangle(pen, GetCaretHexXPos(paintInfo.FirstRowColumn), paintInfo.YStart, (HEXBYTES_WIDTH * paintInfo.RegionLength), HEXSPACING_HEIGHT);
